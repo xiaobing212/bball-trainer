@@ -565,6 +565,14 @@ async function boot() {
   try {
     if ('serviceWorker' in navigator && location.protocol === 'https:') {
       msg('0/4 准备离线缓存…');
+      // 装了新版本（我改了代码）→ 自动刷新一次，让用户直接看到新版界面。
+      // 不加这段的话，缓存优先会让新代码要"再刷一次"才生效，用户会以为没更新。
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!sessionStorage.getItem('reloaded-for-update')) {
+          sessionStorage.setItem('reloaded-for-update', '1');
+          location.reload();
+        }
+      });
       try {
         const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
         // 等它接管（最多 8 秒，别为了缓存把启动卡死）
