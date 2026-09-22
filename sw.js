@@ -52,14 +52,22 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || SKIP.test(new URL(req.url).pathname)) return;
   e.respondWith((async () => {
-    const hit = await caches.match(req, { ignoreSearch: false });
-    if (hit) return hit;
-    // 打开页面时地址是 /bball-trainer/，而缓存里的键是 /bball-trainer/index.html，
-    // 直接匹配会落空 —— 断网时就打不开了。导航请求单独兜一下首页。
+    // 打开页面（导航请求）：联网时**优先走网络**，断网才用缓存。
+    // 缓存优先会让用户永远停在旧版本——CDN/缓存一旦旧了，新代码就永远进不来。
     if (req.mode === 'navigate') {
-      const page = await caches.match('./index.html');
+      try {
+        const fresh = await fetch(req);
+        if (fresh && fresh.status === 200) {
+          caches.open(VERSION).then((c) => c.put('./index.html?v=' + VERSION, fresh.clone()));
+          return fresh;
+        }
+      } catch (_) { /* 断网 → 用缓存 */ }
+      const page = (await caches.match('./index.html?v=' + VERSION))
+                || (await caches.match('./index.html')) || (await caches.match(req));
       if (page) return page;
     }
+    const hit = await caches.match(req, { ignoreSearch: false });
+    if (hit) return hit;
     try {
       const res = await fetch(req);
       // 缓存同源资源和 CDN 资源（只缓存正常的完整响应）
