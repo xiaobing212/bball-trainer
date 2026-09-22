@@ -7,7 +7,7 @@
  * 装机时预取第一类，第二类在页面等 SW 就绪之后才开始下载，所以都能被拦到。
  */
 
-const VERSION = 'bball-v1';
+const VERSION = 'bball-f4399145a8';   // 打包时替换成内容版本，改了代码缓存会自动更新
 
 
 // 预取：页面 + 分析代码 + 姿态模型
@@ -50,6 +50,12 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     const hit = await caches.match(req, { ignoreSearch: false });
     if (hit) return hit;
+    // 打开页面时地址是 /bball-trainer/，而缓存里的键是 /bball-trainer/index.html，
+    // 直接匹配会落空 —— 断网时就打不开了。导航请求单独兜一下首页。
+    if (req.mode === 'navigate') {
+      const page = await caches.match('./index.html');
+      if (page) return page;
+    }
     try {
       const res = await fetch(req);
       // 缓存同源资源和 CDN 资源（只缓存正常的完整响应）
