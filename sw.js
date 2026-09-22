@@ -41,6 +41,10 @@ self.addEventListener('activate', (e) => {
     const keys = await caches.keys();
     await Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)));
     await self.clients.claim();          // 立刻接管当前页面，后续请求才拦得到
+    // 已经在打开的旧页面：它自己不带更新逻辑（那是新版本才有的），
+    // 所以这里主动把它导航一次，让它切到新版本。否则用户会一直卡在旧界面上。
+    const pages = await self.clients.matchAll({ type: 'window' });
+    pages.forEach((c) => { try { c.navigate(c.url); } catch (_) {} });
   })());
 });
 
