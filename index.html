@@ -34,6 +34,10 @@
       transform:translateX(110%)}
     #card.show{transform:translateX(0)}
   }
+  .ctl{flex:1 1 0;min-width:0;padding:9px 2px;font-size:11.5px;border-radius:18px;
+    background:#1c1f26cc;border:1px solid #444;color:#e8eaed;white-space:nowrap;overflow:hidden}
+  .ctl.on{border-color:var(--ok);color:#8ef0b0}
+  .ctl.hi{border-color:#ffb020}
   #closeCard{position:absolute;right:8px;top:8px;width:36px;height:36px;border-radius:50%;
     border:1px solid #4a5262;background:#2c3341;color:#e8eaed;font-size:17px;
     line-height:1;padding:0;z-index:2}
@@ -81,16 +85,14 @@
   <input id="rimSize" type="range" min="0.3" max="3" step="0.05" value="1" style="width:100%">
   <button id="sizeDone" style="width:100%;margin-top:8px;padding:9px;font-size:14px">✓ 好了</button>
 </div>
-<button id="newsess" style="position:fixed;left:96px;bottom:calc(16px + env(safe-area-inset-bottom));
-  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
-  border:1px solid #444;color:#e8eaed">🆕 新的一场</button>
-<button id="voice" style="position:fixed;left:184px;bottom:calc(16px + env(safe-area-inset-bottom));
-  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
-  border:1px solid #3ddc84;color:#8ef0b0">🔊 语音</button>
-<button id="save" style="position:fixed;left:12px;bottom:calc(16px + env(safe-area-inset-bottom));
-  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
-  border:1px solid #444;color:#e8eaed">💾 保存</button>
-<button id="calib" style="position:fixed;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;border:1px solid #444;color:#e8eaed">🎯 标定篮筐</button>
+<div id="bar" style="position:fixed;left:8px;right:8px;bottom:calc(12px + env(safe-area-inset-bottom));
+  z-index:5;display:flex;gap:5px">
+  <button id="save" class="ctl">💾 保存</button>
+  <button id="newsess" class="ctl">🆕 新场</button>
+  <button id="voice" class="ctl on">🔊 语音</button>
+  <button id="flip" class="ctl">📷 后置</button>
+  <button id="calib" class="ctl hi">🎯 标定</button>
+</div>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
 <div id="cardMask" onclick="hideCard()"></div>
@@ -281,6 +283,7 @@ const LANDMARK_NAMES = ["nose", "left_eye_inner", "left_eye", "left_eye_outer", 
 // 远小于录视频；回家能出完整报告（出手检测/12 项指标/问题/一致性）。
 let rec = { lines: [], n: 0, shots: [], t0: 0, w: 0, h: 0 };
 let video = $('cam'), canvas = $('ov'), ctx = canvas.getContext('2d');
+let facing = 'environment';       // 默认后置：拍你的人，正式训练用这个
 let buf = new Float32Array(33 * 4);
 let lastVideoTime = -1, lastShotAt = 0, hideTimer = 0;
 
@@ -451,15 +454,31 @@ document.addEventListener('touchstart', function warm() {
   document.removeEventListener('touchstart', warm);
 }, { once: true });
 
+// 切换前后摄像头：后置拍你（正式训练），前置方便你看着屏幕调机位
+$('flip').onclick = async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  $('flip').textContent = facing === 'environment' ? '📷 后置' : '📷 前置';
+  try {
+    video.srcObject?.getTracks().forEach(t => t.stop());
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 },
+               frameRate: { ideal: 30 } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    speak(facing === 'environment' ? '已切到后置摄像头' : '已切到前置摄像头');
+  } catch (e) {
+    speak('切换摄像头失败');
+  }
+};
+
 $('voice').onclick = () => {
   voiceOn = !voiceOn;
   localStorage.setItem('voice_on', voiceOn ? '1' : '0');
   $('voice').textContent = voiceOn ? '🔊 语音' : '🔇 语音';
-  $('voice').style.borderColor = voiceOn ? '#3ddc84' : '#444';
-  $('voice').style.color = voiceOn ? '#8ef0b0' : '#98a0ad';
+  $('voice').classList.toggle('on', voiceOn);
   if (voiceOn) speak('语音已打开');
 };
-if (!voiceOn) { $('voice').textContent = '🔇 语音'; $('voice').style.borderColor = '#444'; $('voice').style.color = '#98a0ad'; }
+if (!voiceOn) { $('voice').textContent = '🔇 语音'; $('voice').classList.remove('on'); }
 
 // 把这次记录导出成一个文件：关键点（和电脑端 keypoints.csv 同一格式）
 // + 本次投篮明细 + 进球判定。回家丢给 tools/analyze_session.py 就能出完整报告。
@@ -506,8 +525,8 @@ function startNewSession() {
   $('made').textContent = '0'; $('cnt').textContent = '0'; $('cons').textContent = '';
   if (resetFn) { try { resetFn(); } catch (e) {} }
   $('card').classList.remove('show');
-  $('newsess').textContent = `🆕 第 ${sessionNo} 场`;
-  setTimeout(() => { $('newsess').textContent = '🆕 新的一场'; }, 3000);
+  $('newsess').textContent = `🆕 第${sessionNo}场`;
+  setTimeout(() => { $('newsess').textContent = '🆕 新场'; }, 3000);
 }
 
 // 点一下画面标定篮筐中心
@@ -517,8 +536,7 @@ $('card').addEventListener('click', ev => {
 });
 $('calib').onclick = () => {
   calibMode = !calibMode;
-  $('calib').textContent = calibMode ? '👆 点画面里的篮筐中心' : '🎯 标定篮筐';
-  $('calib').style.borderColor = calibMode ? '#ffb020' : '#444';
+  $('calib').textContent = calibMode ? '👆 点筐心' : '🎯 标定';
 };
 $('rimSize').addEventListener('input', ev => {
   rimScale = Number(ev.target.value);
@@ -545,8 +563,8 @@ video.addEventListener('click', ev => {
   $('sizeBox').style.display = 'block';
   localStorage.setItem('rim_norm', JSON.stringify({ rimNorm, rimBox }));
   calibMode = false;
-  $('calib').textContent = '🎯 已标定，可重新标定';
-  $('calib').style.borderColor = '#3ddc84';
+  $('calib').textContent = '🎯 已标定';
+  $('calib').classList.remove('hi');
   if (REPORT) fetch(`/__rim?cx=${cx.toFixed(4)}&cy=${cy.toFixed(4)}`).catch(() => {});
 });
 
@@ -726,7 +744,7 @@ async function boot() {
     } else {
       const stream = await withTimeout(
         navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 },
+          video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 },
                    frameRate: { ideal: 30 } }, audio: false }),
         15000,
         '摄像头一直没响应。最常见的原因：上一个标签页还开着并占着摄像头——把它关掉；' +
@@ -767,7 +785,8 @@ async function boot() {
     } catch (e) { rimNorm = null; }
     if (rimNorm && !rimBox) rimBox = [rimNorm.cx, rimNorm.cy, RIM_HW, RIM_HH];
     if (RIM_PARAM) { const [cx, cy] = RIM_PARAM.split(',').map(Number); if (cx && cy) { rimNorm = { cx, cy }; rimBox = [cx, cy, RIM_HW, RIM_HH]; } }
-    $('calib').textContent = rimNorm ? '🎯 已标定，可重新标定' : '🎯 标定篮筐';
+    $('calib').textContent = rimNorm ? '🎯 已标定' : '🎯 标定';
+    if (rimNorm) $('calib').classList.remove('hi');
     try { await navigator.wakeLock?.request('screen'); } catch (e) {}
 
     canvas.width = video.videoWidth || 720; canvas.height = video.videoHeight || 1280;
