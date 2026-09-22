@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>投篮训练助手</title>
+<style>
+  :root{--fg:#e8eaed;--muted:#98a0ad;--ok:#3ddc84;--warn:#ffb020;--bad:#ff4d4f;--line:#2a2f39}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#000;color:var(--fg);overflow:hidden;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+  video{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+  canvas{position:fixed;left:0;top:0;pointer-events:none}
+  .bar{position:fixed;left:0;right:0;padding:8px 14px;display:flex;gap:12px;align-items:baseline;
+    font-variant-numeric:tabular-nums;pointer-events:none}
+  #top{top:0;padding-top:calc(8px + env(safe-area-inset-top));
+    background:linear-gradient(#000c,#0000 85%)}
+  #top .n{font-size:22px;font-weight:800}
+  #top .k{color:var(--muted);font-size:12px}
+  /* 竖屏：底部抽屉；横屏：右侧面板 —— 横屏时从底下弹会挡住画面 */
+  #card{position:fixed;background:#11151cf7;border:1px solid var(--line);
+    padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+    transition:transform .25s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  #card.closed{pointer-events:none}
+  @media (orientation:portrait){
+    #card{left:0;right:0;bottom:0;border-radius:16px 16px 0 0;max-height:42vh;
+      transform:translateY(110%)}
+    #card.show{transform:translateY(0)}
+  }
+  @media (orientation:landscape){
+    #card{right:0;top:0;bottom:0;width:36%;min-width:280px;border-radius:16px 0 0 16px;
+      padding-left:12px;padding-right:calc(12px + env(safe-area-inset-right));max-height:none;
+      transform:translateX(110%)}
+    #card.show{transform:translateX(0)}
+  }
+  #closeCard{position:absolute;right:8px;top:8px;width:36px;height:36px;border-radius:50%;
+    border:1px solid #4a5262;background:#2c3341;color:#e8eaed;font-size:17px;
+    line-height:1;padding:0;z-index:2}
+  /* 卡片显示时铺一层透明层，点画面任意处即可关闭 */
+  #cardMask{position:fixed;inset:0;z-index:3;display:none}
+  #cardMask.show{display:block}
+  #card .head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;padding-right:38px}
+  #card .score{font-size:40px;font-weight:800;line-height:1}
+  #card .score.good{color:var(--ok)}#card .score.mid{color:var(--warn)}#card .score.bad{color:var(--bad)}
+  .dots{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:5px;margin-bottom:9px}
+  .dot{background:#161a21;border-radius:9px;padding:6px 2px;text-align:center}
+  .dot .nm{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden}
+  .dot .vv{font-size:14px;font-weight:700;margin:2px 0}
+  .dot .marks{display:flex;gap:2px;justify-content:center}
+  .dot .marks i{width:7px;height:7px;border-radius:50%;background:#2f3542}
+  .dot .marks i.g{background:var(--ok)}.dot .marks i.y{background:#ffb020}.dot .marks i.r{background:var(--bad)}
+  .iss{border-radius:9px;padding:8px 10px;margin:6px 0;border:1px solid;font-size:13.5px}
+  .iss.warn{background:#33201a;border-color:#5a3226}.iss.warn b{color:#ffb08a}
+  .iss.info{background:#1a2433;border-color:#26405a}.iss.info b{color:#8ab8ff}
+  .iss.good{background:#14291d;border-color:#245c38}.iss.good b{color:#8ef0b0}
+  .iss .a{color:var(--muted);font-size:12.5px}
+  #boot{position:fixed;inset:0;background:#0f1115;display:grid;place-content:center;
+    padding:28px;text-align:center;gap:10px}
+  #boot.hide{display:none}
+  #boot .t{font-size:17px;font-weight:700}
+  #boot .s{color:var(--muted);font-size:13px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="ov"></canvas>
+
+<div class="bar" id="top">
+  <span class="n" id="cnt">0</span><span class="k">投</span>
+  <span class="k" id="status">准备中</span>
+  <span class="k" style="margin-left:auto" id="fps">-- fps</span>
+  <span class="k" id="cons"></span>
+  <span class="n" id="made" style="margin-left:8px">0</span><span class="k">进</span>
+</div>
+<div id="sizeBox" style="display:none;position:fixed;left:12px;right:12px;
+  bottom:calc(64px + env(safe-area-inset-bottom));z-index:5;background:#11151cf2;border:1px solid #2a2f39;
+  border-radius:14px;padding:12px 14px">
+  <div style="font-size:13px;color:#98a0ad;margin-bottom:6px">
+    调整绿框，让它正好套住篮筐（网绳不算）</div>
+  <input id="rimSize" type="range" min="0.3" max="3" step="0.05" value="1" style="width:100%">
+  <button id="sizeDone" style="width:100%;margin-top:8px;padding:9px;font-size:14px">✓ 好了</button>
+</div>
+<button id="calib" style="position:fixed;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;border:1px solid #444;color:#e8eaed">🎯 标定篮筐</button>
+
+<div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
+<div id="cardMask" onclick="hideCard()"></div>
+<div id="card" class="closed"></div>
+
+<div id="boot">
+  <div class="t">投篮训练助手</div>
+  <div class="s" id="bootmsg">正在加载…</div>
+</div>
+
+<script>
+// 出错的精确位置报到本地服务，方便远程调试（手机上不好开控制台）
+window.addEventListener('error', e => {
+  fetch('/__err?msg=' + encodeURIComponent(String(e.message).slice(0, 200))
+        + '&line=' + e.lineno + '&col=' + e.colno).catch(() => {});
+});
+</script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $ = id => document.getElementById(id);
+const REPORT = location.search.includes('report');
+const PARAMS = new URLSearchParams(location.search);
+const VIDEO_URL = PARAMS.get('video');          // 用视频文件代替摄像头（测试用）
+const RIM_PARAM = PARAMS.get('rim');            // 直接指定筐心（标定不方便时/测试用）
+const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
+const CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+// 模型放在本地由我们自己的服务器提供：不再依赖 Google 的服务器
+// （国内访问 storage.googleapis.com 经常不稳，卡在加载姿态模型这一步）
+const MODEL = "./models/pose_landmarker_full.task";
+const PY_FILES = ["__init__.py", "config.py", "pose.py", "shots.py", "metrics.py", "feedback.py",
+                  "live.py", "ball.py"];   // 手机端要加载的项目代码（与电脑端同一批文件）
+
+// 手机上跑的就是桌面端同一份分析代码，这里只是接线
+const PY_GLUE = `
+import json, sys, numpy as np
+sys.path.insert(0, '/')
+import cv2
+from bball import config as C
+from bball.ball import BallWatcher
+from bball.live import LiveAnalyzer, LiveConfig
+from bball.feedback import compute_consistency
+
+cfg = C.Config()
+analyzer = None
+shots = []
+watcher = None          # 正在跟踪的这一次投篮
+prev_len = 0
+crop_box = None         # 搜索区（原分辨率像素框）——手机只搬这一小块
+
+def start_watch(rim_norm, release_px, w, h, fps):
+    """投篮球出手后开始跟踪。返回需要从画面里裁哪一块（原分辨率，不降采样）。"""
+    global watcher, crop_box
+    cx, cy, hw, hh = rim_norm
+    x0, y0, x1, y1 = (cx - hw) * w, (cy - hh) * h, (cx + hw) * w, (cy + hh) * h
+    probe = BallWatcher((x0, y0, x1, y1), release_px, (w, h), fps)   # 只为拿搜索区
+    rx0, ry0, rx1, ry1 = probe.roi
+    cw, ch = int(rx1 - rx0), int(ry1 - ry0)
+    rim_c = (x0 - rx0, y0 - ry0, x1 - rx0, y1 - ry0)
+    rp_c = None
+    if release_px:
+        rp_c = ((release_px[0] * w - rx0) / cw, (release_px[1] * h - ry0) / ch)
+    watcher = BallWatcher(rim_c, rp_c, (cw, ch), fps, ref_size=(w, h), cropped=True)
+    crop_box = (int(rx0), int(ry0), int(rx1), int(ry1))
+    return json.dumps({"box": crop_box})
+
+def detect_rim(buf, w, h, nx, ny):
+    """在点击位置附近找橙色的筐圈，量出它的实际大小。
+
+    固定半宽半高（0.038/0.035）是按之前那段 4K 视频标的，换个机位/距离就不对了——
+    框套不住筐口，球穿过去也不算「进」。所以点一下就让程序自己量。
+    """
+    img = np.frombuffer(bytes(buf.to_py()), np.uint8).reshape(h, w, 4)
+    bgr = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (5, 90, 70), (26, 255, 255))
+    px, py = int(nx * w), int(ny * h)
+    r = max(60, int(0.12 * min(w, h)))          # 只在点击点周围找，避免地板上其他橙色
+    box = np.zeros_like(mask)
+    box[max(0, py - r):py + r, max(0, px - r):px + r] = mask[max(0, py - r):py + r, max(0, px - r):px + r]
+    cnts, _ = cv2.findContours(box, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best = None
+    for c in cnts:
+        a = cv2.contourArea(c)
+        if a < 12:
+            continue
+        x, y, bw, bh = cv2.boundingRect(c)
+        # 筐圈是个横向的小环：太扁或太方都不像
+        if bw < 8 or bh < 3 or bw > 0.5 * w or bh > 0.5 * h:
+            continue
+        if best is None or a > best[0]:
+            best = (a, x, y, bw, bh)
+    if best is None:
+        return json.dumps({"found": False})
+    _, x, y, bw, bh = best
+    cx, cy = (x + bw / 2) / w, (y + bh / 2) / h
+    # 稍微外扩一点，把整个筐口圈进来
+    return json.dumps({"found": True, "cx": round(cx, 4), "cy": round(cy, 4),
+                       "hw": round(bw / w * 0.55, 4), "hh": round(bh / h * 0.55, 4),
+                       "px": [x, y, bw, bh]})
+
+
+def feed_watch(buf, w, h, t):
+    """喂一帧裁剪图（canvas 给的 RGBA）。跟满窗口后返回判定。"""
+    if watcher is None:
+        return json.dumps({})
+    if not isinstance(buf, (bytes, bytearray, memoryview)):
+        buf = bytes(buf.to_py())            # JsProxy → Python 缓冲区
+    rgba = np.frombuffer(buf, np.uint8).reshape(h, w, 4)
+    watcher.feed(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR), float(t))
+    pt = None
+    if watcher.pts and (not prev_len or len(watcher.pts) > prev_len):
+        pt = [watcher.pts[-1][1], watcher.pts[-1][2]]      # 裁剪图内坐标
+    globals()["prev_len"] = len(watcher.pts)
+    out = {"pt": pt, "crop": list(crop_box) if crop_box else None, "pts": len(watcher.pts)}
+    if watcher.done:
+        out["verdict"] = watcher.verdict()
+    return json.dumps(out)
+
+def init(fps, side="auto"):
+    global analyzer, shots
+    analyzer = LiveAnalyzer(fps=float(fps), side=side, cfg=cfg, live_cfg=LiveConfig())
+    shots = []
+    return True
+
+def push(flat):
+    """flat: JS 的 Float32Array(132)，必须 copy —— 缓冲区每帧复用，不 copy 会让历史帧全变成同一帧。"""
+    lm = np.array(flat, dtype=np.float32).reshape(33, 4)
+    shot = analyzer.push(lm)
+    if shot is None:
+        return json.dumps({"status": analyzer.status})
+    shots.append(shot)
+    m = shot.metrics
+    warns = sum(1 for i in shot.issues if i.severity == "warn")
+    infos = len(shot.issues) - warns
+    cons = compute_consistency([s.metrics for s in shots], cfg.feedback).overall
+    return json.dumps({
+        "status": analyzer.status,
+        "shot": {
+            "n": shot.shot_number,
+            "t": round(shot.release_time, 2),
+            "px": list(m.release_px) if m.release_px else None,
+            "score": max(40, 100 - 12 * warns - 5 * infos),
+            "issues": [{"title": i.title, "advice": i.advice, "severity": i.severity}
+                       for i in shot.issues],
+            "m": {k: m.to_dict()[k] for k in
+                  ("release_height_rel_head", "release_angle_deg", "elbow_release_deg",
+                   "knee_dip_deg", "follow_through_s", "max_trunk_lean_deg")},
+        },
+        "cons": round(cons, 1) if cons is not None else None,
+    })
+`;
+
+const BONES = [[0,11],[0,12],[11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],[23,25],[25,27],[27,29],[29,31],[24,26],[26,28],[28,30],[30,32]];
+const DOTS = [
+  ["出手高度", "release_height_rel_head", "num", [[0.40, 9], [0.20, 0.40], [0.0, 0.20]]],
+  ["出手角度", "release_angle_deg", "deg", [[45, 68], [42, 45], [38, 42]]],
+  ["出手时肘角", "elbow_release_deg", "deg", [[150, 180], [130, 150], [115, 130]]],
+  ["下蹲深度", "knee_dip_deg", "deg", [[100, 135], [95, 100], [88, 95]]],
+  ["跟随动作", "follow_through_s", "sec", [[0.5, 9], [0.35, 0.5], [0.25, 0.35]]],
+];
+
+let pyodide, pushFn, landmarker, startWatchFn, feedWatchFn;
+let rimNorm = null;                 // {cx, cy} 归一化筐心，存 localStorage
+let cropBox = null;                 // 正在跟踪时，要从画面裁哪一块
+let cropCanvas = null, cropCtx = null;
+let calibMode = false, madeCount = 0, watchFed = 0;
+let rimBox = null;                  // 归一化 (cx,cy,hw,hh)
+let ballPts = [];                   // 最近跟到的球心（屏幕坐标，用于画轨迹）
+let rimScale = 1.0;                 // 筐口框大小倍率（点完中心自己调）
+const DBG = location.search.includes('debug') || REPORT;
+const RIM_HW = 0.038, RIM_HH = 0.035;
+let video = $('cam'), canvas = $('ov'), ctx = canvas.getContext('2d');
+let buf = new Float32Array(33 * 4);
+let lastVideoTime = -1, lastShotAt = 0, hideTimer = 0;
+
+// 带超时的等待：卡住时要能说话，不能一直转圈
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(message)), ms)),
+  ]);
+}
+
+// 问 Service Worker 缓存了多少东西，够了就说明断网也能用
+function checkOffline() {
+  const el = document.getElementById('offline');
+  if (!el) return;
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+    el.textContent = '⚠️ 无离线缓存（刷新一次即可建立）';
+    el.style.color = 'var(--warn)';
+    return;
+  }
+  const onMsg = (e) => {
+    if (!e.data || e.data.type !== 'cache-status') return;
+    navigator.serviceWorker.removeEventListener('message', onMsg);
+    const mb = e.data.bytes / 1048576;
+    if (mb > 40) {
+      el.textContent = `✅ 已可离线使用（缓存 ${mb.toFixed(0)}MB，断网也能开）`;
+      el.style.color = 'var(--ok)';
+    } else {
+      el.textContent = `⚠️ 缓存还不全（${mb.toFixed(0)}MB），联网再打开一次`;
+      el.style.color = 'var(--warn)';
+    }
+  };
+  navigator.serviceWorker.addEventListener('message', onMsg);
+  navigator.serviceWorker.controller.postMessage({ type: 'cache-status' });
+}
+
+function marks(v, bands) {
+  if (v === null || v === undefined) return 0;
+  for (let i = 0; i < bands.length; i++) if (v >= bands[i][0] && v <= bands[i][1]) return 4 - i;
+  return 1;
+}
+function fmt(v, kind) {
+  if (v === null || v === undefined) return '—';
+  return kind === 'deg' ? Math.round(v) + '°' : (kind === 'sec' ? v.toFixed(2) + 's' : (Math.round(v * 100) / 100));
+}
+
+function showShot(res) {
+  const s = res.shot, m = s.m;
+  const cls = s.score >= 80 ? 'good' : (s.score >= 60 ? 'mid' : 'bad');
+  $('card').innerHTML = `
+    <button id="closeCard" onclick="hideCard()">✕</button>
+    <div class="head"><span class="score ${cls}">${s.score}</span>
+      <span class="k">第 ${s.n} 投 · ${s.t}s<br>
+      ${s.score >= 80 ? '动作标准' : (s.score >= 60 ? '有可改的地方' : '问题较多')}</span>
+      <span id="verdict" style="margin-left:auto;font-size:26px;font-weight:800;color:#98a0ad">--</span></div>
+    <div class="dots">${DOTS.map(([nm, key, kind, bands]) => {
+      const n = marks(m[key], bands);
+      const c = n >= 3 ? 'g' : (n === 2 ? 'y' : 'r');
+      return `<div class="dot"><div class="nm">${nm}</div><div class="vv">${fmt(m[key], kind)}</div>
+        <div class="marks">${[0,1,2,3].map(i => `<i class="${i < n ? c : ''}"></i>`).join('')}</div></div>`;
+    }).join('')}</div>
+    ${s.issues.length
+      ? s.issues.map(i => `<div class="iss ${i.severity}"><b>${i.title}</b><div class="a">${i.advice}</div></div>`).join('')
+      : '<div class="iss good"><b>动作标准</b><div class="a">这一投没有发现明显问题</div></div>'}`;
+  showCard();
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(hideCard, 8000);          // 8 秒自动收起，别一直挡着
+}
+
+function showCard() {
+  $('card').classList.add('show');
+  $('card').classList.remove('closed');
+  $('cardMask').classList.add('show');
+  $('calib').style.display = 'none';          // 别压住卡片
+}
+function hideCard() {
+  $('card').classList.remove('show');
+  $('cardMask').classList.remove('show');
+  $('calib').style.display = '';
+  setTimeout(() => $('card').classList.add('closed'), 300);   // 收起后不再挡点击
+  clearTimeout(hideTimer);
+}
+window.hideCard = hideCard;
+
+function startBallWatch(shot, fps) {
+  if (!rimNorm || !startWatchFn || cropBox) return;
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) return;
+  const rim = [rimNorm.cx, rimNorm.cy, RIM_HW, RIM_HH];
+  try {
+    const r = JSON.parse(startWatchFn(rim, shot.px, w, h, fps));
+    cropBox = r.box;
+    if (REPORT) fetch(`/__watch?box=${r.box.join(',')}&px=${shot.px}&w=${w}&h=${h}`).catch(() => {});
+  } catch (e) {
+    cropBox = null;
+    if (REPORT) fetch('/__watch?starterr=' + encodeURIComponent(e.message)).catch(() => {});
+  }
+}
+
+function feedBallWatch() {
+  const [x0, y0, x1, y1] = cropBox;
+  const w = x1 - x0, h = y1 - y0;
+  if (w <= 0 || h <= 0) { cropBox = null; return; }
+  if (!cropCanvas || cropCanvas.width !== w || cropCanvas.height !== h) {
+    cropCanvas = document.createElement('canvas');
+    cropCanvas.width = w; cropCanvas.height = h;
+    cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  // 在原分辨率上裁出搜索区画到小 canvas —— 不降采样，球只有几个像素，一缩就丢
+  cropCtx.drawImage(video, x0, y0, w, h, 0, 0, w, h);
+  let res = {};
+  try {
+    const img = cropCtx.getImageData(0, 0, w, h);
+    // 传 Uint8Array 而不是 Uint8ClampedArray —— 后者到 Python 是 JsProxy，不能当缓冲区用
+    const bytes = new Uint8Array(img.data.buffer);
+    res = JSON.parse(feedWatchFn(bytes, w, h, video.currentTime));
+  } catch (e) {
+    if (REPORT) fetch('/__watch?feederr=' + encodeURIComponent(e.message)).catch(() => {});
+    cropBox = null; return;
+  }
+  if (res.pt && res.crop) {                 // 裁剪图坐标 → 画面归一化坐标
+    const [ox, oy, cw2, ch2] = res.crop;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    ballPts.push([(ox + res.pt[0]) / vw, (oy + res.pt[1]) / vh]);
+    if (ballPts.length > 80) ballPts.shift();
+  }
+  if (REPORT && (watchFed++ % 30) === 0) fetch(`/__watch?fed=${watchFed}&pts=${res.pts || 0}`).catch(() => {});
+  if (res.verdict) {
+    cropBox = null;
+    const el = $('verdict');
+    if (el) {
+      el.textContent = res.verdict;
+      el.style.color = res.verdict === '进' ? 'var(--ok)' : (res.verdict === '不进' ? 'var(--bad)' : 'var(--muted)');
+    }
+    if (res.verdict === '进') { madeCount++; $('made').textContent = madeCount; }
+    if (REPORT) fetch(`/__ball?v=${encodeURIComponent(res.verdict)}&pts=${res.pts || 0}`).catch(() => {});
+  }
+}
+
+// 点一下画面标定篮筐中心
+// 卡片上的关闭按钮每次 innerHTML 都会重建，用事件委托
+$('card').addEventListener('click', ev => {
+  if (ev.target && ev.target.id === 'closeCard') hideCard();
+});
+$('calib').onclick = () => {
+  calibMode = !calibMode;
+  $('calib').textContent = calibMode ? '👆 点画面里的篮筐中心' : '🎯 标定篮筐';
+  $('calib').style.borderColor = calibMode ? '#ffb020' : '#444';
+};
+$('rimSize').addEventListener('input', ev => {
+  rimScale = Number(ev.target.value);
+  if (rimNorm) {
+    rimBox = [rimNorm.cx, rimNorm.cy, RIM_HW * rimScale, RIM_HH * rimScale];
+    localStorage.setItem('rim_norm', JSON.stringify({ rimNorm, rimBox }));
+  }
+});
+$('sizeDone').onclick = () => { $('sizeBox').style.display = 'none'; };
+
+video.addEventListener('click', ev => {
+  if (!calibMode) return;
+  const r = video.getBoundingClientRect();
+  // object-fit:contain —— 先换算回视频内容区域
+  const scale = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+  const cw = video.videoWidth * scale, ch = video.videoHeight * scale;
+  const ox = r.left + (r.width - cw) / 2, oy = r.top + (r.height - ch) / 2;
+  const cx = (ev.clientX - ox) / cw, cy = (ev.clientY - oy) / ch;
+  if (cx < 0 || cx > 1 || cy < 0 || cy > 1) return;
+  rimNorm = { cx, cy };
+  rimBox = [cx, cy, RIM_HW * rimScale, RIM_HH * rimScale];
+  // 筐圈是细细一圈、还常被网和篮板挡住，自动量不可靠（实测找出来的框偏到别处）。
+  // 改成：点中心 + 看屏幕上的绿框自己调大小 —— 框是实时画出来的，对不对一眼就能看见。
+  $('sizeBox').style.display = 'block';
+  localStorage.setItem('rim_norm', JSON.stringify({ rimNorm, rimBox }));
+  calibMode = false;
+  $('calib').textContent = '🎯 已标定，可重新标定';
+  $('calib').style.borderColor = '#3ddc84';
+  if (REPORT) fetch(`/__rim?cx=${cx.toFixed(4)}&cy=${cy.toFixed(4)}`).catch(() => {});
+});
+
+// 让 canvas 精确盖住视频的显示区域：视频是 object-fit:contain，会留黑边，
+// canvas 铺满全屏的话骨架和框都会错位。
+function syncCanvas() {
+  const r = video.getBoundingClientRect();
+  if (!r.width || !video.videoWidth) return;
+  const s = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+  const cw = video.videoWidth * s, ch = video.videoHeight * s;
+  const left = r.left + (r.width - cw) / 2, top = r.top + (r.height - ch) / 2;
+  if (canvas.style.width !== cw + 'px' || canvas.style.height !== ch + 'px'
+      || canvas.style.left !== left + 'px' || canvas.style.top !== top + 'px') {
+    canvas.style.left = left + 'px'; canvas.style.top = top + 'px';
+    canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  }
+}
+
+function draw(lm) {
+  syncCanvas();
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!lm) return;
+  const P = i => ({ x: lm[i].x * w, y: lm[i].y * h, v: lm[i].visibility ?? 1 });
+  ctx.lineWidth = Math.max(2, w / 320); ctx.strokeStyle = 'rgba(93,225,141,.95)';
+  ctx.beginPath();
+  for (const [a, b] of BONES) {
+    const p = P(a), q = P(b);
+    if (p.v < 0.4 || q.v < 0.4) continue;
+    ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,138,92,.95)';
+  for (let i = 0; i < lm.length; i++) if (P(i).v >= 0.4) {
+    ctx.beginPath(); ctx.arc(P(i).x, P(i).y, Math.max(2, w / 400), 0, Math.PI * 2); ctx.fill();
+  }
+  drawGuides(w, h);
+}
+
+// 实时画出「系统认的筐口」和「跟到的球」——判错时一眼就能看出是框不对还是球没跟住
+function drawGuides(w, h) {
+  if (rimBox) {
+    const [cx, cy, hw, hh] = rimBox;
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = 'rgba(61,220,132,.95)';
+    ctx.lineWidth = Math.max(2, w / 320);
+    ctx.strokeRect((cx - hw) * w, (cy - hh) * h, hw * 2 * w, hh * 2 * h);
+    ctx.restore();
+  }
+  if (ballPts.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,0,255,.9)';
+    ctx.fillStyle = 'rgba(255,0,255,.9)';
+    ctx.lineWidth = Math.max(2, w / 300);
+    ctx.beginPath();
+    ballPts.forEach(([nx, ny], i) => i ? ctx.lineTo(nx * w, ny * h) : ctx.moveTo(nx * w, ny * h));
+    ctx.stroke();
+    const [lx, ly] = ballPts[ballPts.length - 1];
+    ctx.beginPath(); ctx.arc(lx * w, ly * h, Math.max(4, w / 150), 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// 调试心跳：?report 时每 2 秒上报一次当前状态，便于在电脑上定位卡在哪一步
+let hbFrames = 0, hbPosed = 0;
+if (REPORT) setInterval(() => {
+  fetch(`/__hb?status=${encodeURIComponent($('status').textContent)}&fps=${fpsEma.toFixed(1)}`
+    + `&frames=${hbFrames}&posed=${hbPosed}&boot=${$('boot').classList.contains('hide') ? 1 : 0}`
+    + `&msg=${encodeURIComponent($('bootmsg').textContent.slice(0, 380))}`
+    + `&vh=${video.videoHeight || 0}&rs=${video.readyState}&err=${video.error ? video.error.code : 0}&lm=${landmarker ? 1 : 0}&src=${encodeURIComponent((video.currentSrc||'').slice(-24))}`).catch(() => {});
+  hbFrames = hbPosed = 0;
+}, 2000);
+
+let fpsEma = 0, lastT = 0;
+async function loop() {
+  requestAnimationFrame(loop);
+  if (!landmarker || video.readyState < 2) return;
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+
+  const now = performance.now();
+  const dt = now - lastT; lastT = now;
+  if (dt > 0 && dt < 500) fpsEma = fpsEma ? fpsEma * 0.9 + (1000 / dt) * 0.1 : 1000 / dt;
+  $('fps').textContent = fpsEma.toFixed(0) + ' fps';
+
+  let res = null;
+  try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
+  const lm = res?.landmarks?.[0] || null;
+  hbFrames++; if (lm) hbPosed++;
+  draw(lm);
+
+  if (cropBox) feedBallWatch();      // 正在跟踪球：裁一小块喂给判定
+
+  let out = null;
+  if (lm) {
+    for (let i = 0; i < 33; i++) {
+      const p = lm[i];
+      buf[i * 4] = p.x; buf[i * 4 + 1] = p.y; buf[i * 4 + 2] = p.z; buf[i * 4 + 3] = p.visibility ?? 1;
+    }
+  } else {
+    buf.fill(NaN);
+  }
+  try { out = JSON.parse(pushFn(buf)); } catch (e) { return; }
+  $('status').textContent = out.status;
+  if (out.shot) {
+    $('cnt').textContent = out.shot.n;
+    $('cons').textContent = out.cons != null ? `一致性 ${Math.round(out.cons)}` : '';
+    showShot(out);
+    startBallWatch(out.shot, fpsEma > 5 ? fpsEma : 30);
+    lastShotAt = Date.now();
+    if (REPORT) fetch(`/__app?n=${out.shot.n}&t=${out.shot.t}&score=${out.shot.score}`
+      + `&angle=${out.shot.m.release_angle_deg}&issues=${encodeURIComponent(out.shot.issues.map(i=>i.title).join('|'))}`
+      + `&fps=${fpsEma.toFixed(1)}`).catch(() => {});
+  }
+}
+
+async function boot() {
+  const msg = t => { $('bootmsg').textContent = t; };
+  try {
+    if ('serviceWorker' in navigator && location.protocol === 'https:') {
+      msg('0/4 准备离线缓存…');
+      try {
+        const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
+        // 等它接管（最多 8 秒，别为了缓存把启动卡死）
+        await Promise.race([navigator.serviceWorker.ready,
+                            new Promise(r => setTimeout(r, 8000))]);
+        if (REPORT) fetch('/__sw?reg=1&state=' + (reg.active ? 'active' : (reg.installing ? 'installing' : reg.waiting ? 'waiting' : '?'))
+          + '&ctrl=' + (navigator.serviceWorker.controller ? 1 : 0)).catch(() => {});
+      } catch (e) {
+        if (REPORT) fetch('/__sw?err=' + encodeURIComponent(e.name + ': ' + e.message)).catch(() => {});
+      }
+    }
+    msg('1/4 下载并启动 Python 运行时（约 10MB，第一次较慢）…');
+    pyodide = await loadPyodide({ indexURL: PYODIDE_URL });
+    msg('2/4 加载 numpy 与 OpenCV（约 60MB，第一次较久）…');
+    await pyodide.loadPackage("numpy");
+    await pyodide.loadPackage("opencv-python");
+    msg('3/4 载入分析代码…');
+    pyodide.FS.mkdirTree('/bball');
+    for (const f of PY_FILES) {
+      const src = f === "__init__.py" ? "" : await (await fetch(`bball/${f}`)).text();
+      pyodide.FS.writeFile(`/bball/${f}`, src);
+    }
+    await pyodide.runPythonAsync(PY_GLUE);
+
+    msg('4/4 打开摄像头…');
+    if (VIDEO_URL) {
+      video.src = VIDEO_URL; video.loop = true;
+      await video.play().catch(() => {});
+    } else {
+      const stream = await withTimeout(
+        navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 },
+                   frameRate: { ideal: 30 } }, audio: false }),
+        15000,
+        '摄像头一直没响应。最常见的原因：上一个标签页还开着并占着摄像头——把它关掉；' +
+        '或者系统/浏览器还没给这个网站摄像头权限。');
+      video.srcObject = stream;
+      await video.play();
+    }
+    msg('4/4 下载姿态模型（约 9MB）…');
+    const fileset = await withTimeout(FilesetResolver.forVisionTasks(`${CDN}/wasm`), 30000,
+      '姿态模型的运行库下载失败（网络问题？）');
+    msg('4/4 初始化姿态模型…');
+    try {
+      landmarker = await withTimeout(PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' },
+        runningMode: 'VIDEO', numPoses: 1,
+        minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5 }), 45000,
+        '姿态模型下载超时（网络太慢或访问不了 Google 的模型服务器）');
+    } catch (e) {
+      landmarker = await withTimeout(PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
+        runningMode: 'VIDEO', numPoses: 1 }), 45000,
+        '姿态模型下载超时（网络太慢或访问不了 Google 的模型服务器）');
+    }
+    const fps = VIDEO_URL ? 30.0 : (video.getVideoTracks?.()[0]?.getSettings?.().frameRate || 30);
+    pyodide.globals.get("init")(fps);
+    pushFn = pyodide.globals.get("push");
+    startWatchFn = pyodide.globals.get("start_watch");
+    feedWatchFn = pyodide.globals.get("feed_watch");
+    try {
+      const saved = JSON.parse(localStorage.getItem('rim_norm') || 'null');
+      if (saved && saved.rimNorm) {
+        rimNorm = saved.rimNorm; rimBox = saved.rimBox;
+        rimScale = Math.round((rimBox[2] / RIM_HW) * 100) / 100;
+        $('rimSize').value = rimScale;
+      }
+      else if (saved) { rimNorm = saved; }                 // 旧格式只有中心点
+    } catch (e) { rimNorm = null; }
+    if (rimNorm && !rimBox) rimBox = [rimNorm.cx, rimNorm.cy, RIM_HW, RIM_HH];
+    if (RIM_PARAM) { const [cx, cy] = RIM_PARAM.split(',').map(Number); if (cx && cy) { rimNorm = { cx, cy }; rimBox = [cx, cy, RIM_HW, RIM_HH]; } }
+    $('calib').textContent = rimNorm ? '🎯 已标定，可重新标定' : '🎯 标定篮筐';
+    try { await navigator.wakeLock?.request('screen'); } catch (e) {}
+
+    canvas.width = video.videoWidth || 720; canvas.height = video.videoHeight || 1280;
+    $('boot').classList.add('hide');
+    checkOffline();
+    loop();
+  } catch (e) {
+    console.error('BOOT FAIL', e);
+    $('bootmsg').innerHTML = `启动失败：${e.message}` +
+      (location.protocol !== 'https:' && location.hostname !== 'localhost'
+        ? '<br>（提示：手机浏览器只在 HTTPS 下允许开摄像头）' : '') +
+      '<br><br>可以先试试：<br>① 把这个页面所有标签页都关掉，重新打开<br>' +
+      '② 确认没有别的 App 在用摄像头<br>③ 检查网络能不能打开外网（模型要从 Google 下载）';
+    $('bootmsg').innerHTML += '<br><br><button id="retry" style="padding:10px 20px;font-size:15px;'
+      + 'border-radius:10px;border:1px solid #444;background:#1c1f26;color:#e8eaed">重试</button>';
+    $('retry').onclick = () => location.reload();
+  }
+}
+boot();
+</script>
+</body>
+</html>
