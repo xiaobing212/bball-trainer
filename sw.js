@@ -7,7 +7,7 @@
  * 装机时预取第一类，第二类在页面等 SW 就绪之后才开始下载，所以都能被拦到。
  */
 
-const VERSION = 'bball-9ffb946da5';   // 打包时替换成内容版本，改了代码缓存会自动更新
+const VERSION = 'bball-887919807e';   // 打包时替换成内容版本，改了代码缓存会自动更新
 
 
 // 预取：页面 + 分析代码 + 姿态模型
@@ -105,6 +105,19 @@ self.addEventListener('message', (e) => {
       model: has(/pose_landmarker_full\.task$/),
       code: has(/bball\/ball\.py$/),
     };
-    e.source && e.source.postMessage({ type: 'cache-status', count: keys.length, bytes, key });
+    // 把缺失的 URL 一并回给页面，让它自己补（有些资源浏览器会走普通缓存，
+    // SW 拦不到就存不进来——页面用 cache:'reload' 重新拉一次就能补上）
+    const MISS = {
+      pyodide: ['https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js'],
+      numpy: [], opencv: [], mediapipe: [], model: [], code: [],
+    };
+    const MISS_URLS = {
+      pyodide: ['https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js',
+                'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.asm.wasm'],
+    };
+    const missingUrls = Object.entries(key).filter(([, ok]) => !ok)
+      .flatMap(([k]) => MISS_URLS[k] || []);
+    e.source && e.source.postMessage(
+      { type: 'cache-status', count: keys.length, bytes, key, missingUrls });
   })());
 });

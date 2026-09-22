@@ -297,6 +297,9 @@ function checkOffline() {
       el.textContent = `⏳ 正在缓存：还差 ${missing.join('、')}（已 ${mb.toFixed(0)}MB）`
                      + ' —— 保持页面打开别关，跟到 100% 就好';
       el.style.color = 'var(--warn)';
+      // 缺东西就自己补一遍：用 cache:'reload' 绕过普通网页缓存重新拉，
+      // 这样 Service Worker 才拦得到、存得进离线缓存
+      (e.data.missingUrls || []).forEach(u => fetch(u, { cache: 'reload' }).catch(() => {}));
       if (!offlineTimer) offlineTimer = setInterval(checkOffline, 15000);   // 没齐就每 15 秒刷新进度
     }
   };
@@ -577,6 +580,7 @@ async function boot() {
       });
       try {
         const reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
+        reg.update().catch(() => {});      // 主动查更新，不等浏览器自己发现
         // 等它接管（最多 8 秒，别为了缓存把启动卡死）
         await Promise.race([navigator.serviceWorker.ready,
                             new Promise(r => setTimeout(r, 8000))]);
