@@ -81,6 +81,9 @@
   <input id="rimSize" type="range" min="0.3" max="3" step="0.05" value="1" style="width:100%">
   <button id="sizeDone" style="width:100%;margin-top:8px;padding:9px;font-size:14px">✓ 好了</button>
 </div>
+<button id="save" style="position:fixed;left:12px;bottom:calc(16px + env(safe-area-inset-bottom));
+  z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;
+  border:1px solid #444;color:#e8eaed">💾 保存数据</button>
 <button id="calib" style="position:fixed;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;border:1px solid #444;color:#e8eaed">🎯 标定篮筐</button>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
@@ -259,6 +262,11 @@ let ballPts = [];                   // 最近跟到的球心（屏幕坐标，�
 let rimScale = 1.0;                 // 筐口框大小倍率（点完中心自己调）
 const DBG = location.search.includes('debug') || REPORT;
 const RIM_HW = 0.038, RIM_HH = 0.035;
+// 关键点名字：和电脑端 keypoints.csv 完全一致，这样回家能直接用同一套工具分析
+const LANDMARK_NAMES = ["nose", "left_eye_inner", "left_eye", "left_eye_outer", "right_eye_inner", "right_eye", "right_eye_outer", "left_ear", "right_ear", "mouth_left", "mouth_right", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_pinky", "right_pinky", "left_index", "right_index", "left_thumb", "right_thumb", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle", "left_heel", "right_heel", "left_foot_index", "right_foot_index"];
+// 记录：每帧存一行（就是 keypoints.csv 的格式）。代价极小——10 分钟约 10MB 文本，
+// 远小于录视频；回家能出完整报告（出手检测/12 项指标/问题/一致性）。
+let rec = { lines: [], n: 0, shots: [], t0: 0, w: 0, h: 0 };
 let video = $('cam'), canvas = $('ov'), ctx = canvas.getContext('2d');
 let buf = new Float32Array(33 * 4);
 let lastVideoTime = -1, lastShotAt = 0, hideTimer = 0;
@@ -406,9 +414,36 @@ function feedBallWatch() {
       el.style.color = res.verdict === '进' ? 'var(--ok)' : (res.verdict === '不进' ? 'var(--bad)' : 'var(--muted)');
     }
     if (res.verdict === '进') { madeCount++; $('made').textContent = madeCount; }
+    const last = rec.shots[rec.shots.length - 1];
+    if (last) last.verdict = res.verdict;      // 判定结果一并存，回家报告里直接显示
     if (REPORT) fetch(`/__ball?v=${encodeURIComponent(res.verdict)}&pts=${res.pts || 0}`).catch(() => {});
   }
 }
+
+// 把这次记录导出成一个文件：关键点（和电脑端 keypoints.csv 同一格式）
+// + 本次投篮明细 + 进球判定。回家丢给 tools/analyze_session.py 就能出完整报告。
+function saveSession() {
+  if (!rec.lines.length) { alert('还没有记录到画面'); return; }
+  const span = rec.lastT - rec.firstT;
+  const fps = span > 1 ? (rec.n - 1) / span : 30;
+  const header = ['# 手机端记录：投篮训练助手', `# fps=${fps.toFixed(2)}`,
+    `# width=${rec.w}`, `# height=${rec.h}`, `# frames=${rec.n}`,
+    "# smoothed=false（手机存的是原始关键点，分析时要补洞+平滑）",
+    '# shots=' + JSON.stringify(rec.shots),
+    '# rim=' + JSON.stringify(rimBox),
+    ['frame', 'time_s', 'detected', 'valid',
+     ...LANDMARK_NAMES.flatMap(n => [n + '_x', n + '_y', n + '_z', n + '_visibility'])].join(',')];
+  const csv = header.join('\n') + '\n' + rec.lines.join('\n') + '\n';
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '').slice(2);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `bball_${stamp}.csv`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+  $('save').textContent = `💾 已导出 ${rec.shots.length} 投`;
+  setTimeout(() => { $('save').textContent = '💾 保存数据'; }, 4000);
+}
+$('save').onclick = saveSession;
 
 // 点一下画面标定篮筐中心
 // 卡片上的关闭按钮每次 innerHTML 都会重建，用事件委托
@@ -543,20 +578,31 @@ async function loop() {
   if (cropBox) feedBallWatch();      // 正在跟踪球：裁一小块喂给判定
 
   let out = null;
+  const det = lm ? 1 : 0;
+  const row = [rec.n++, video.currentTime.toFixed(4), det, det];
   if (lm) {
     for (let i = 0; i < 33; i++) {
       const p = lm[i];
       buf[i * 4] = p.x; buf[i * 4 + 1] = p.y; buf[i * 4 + 2] = p.z; buf[i * 4 + 3] = p.visibility ?? 1;
+      row.push(p.x.toFixed(5), p.y.toFixed(5), p.z.toFixed(5), (p.visibility ?? 1).toFixed(3));
     }
   } else {
     buf.fill(NaN);
+    for (let i = 0; i < 132; i++) row.push('0.00000');
   }
+  // 上限约 60 分钟（30fps）：再长内存吃不消，也没有分析价值
+  if (rec.lines.length < 110000) rec.lines.push(row.join(','));
+  if (!rec.firstT) rec.firstT = video.currentTime;
+  rec.lastT = video.currentTime;
+  if (!rec.w) { rec.w = video.videoWidth; rec.h = video.videoHeight; }
   try { out = JSON.parse(pushFn(buf)); } catch (e) { return; }
   $('status').textContent = out.status;
   if (out.shot) {
     $('cnt').textContent = out.shot.n;
     $('cons').textContent = out.cons != null ? `一致性 ${Math.round(out.cons)}` : '';
     showShot(out);
+    rec.shots.push({ n: out.shot.n, t: out.shot.t, score: out.shot.score,
+                     issues: out.shot.issues.map(i => i.title), verdict: null });
     startBallWatch(out.shot, fpsEma > 5 ? fpsEma : 30);
     lastShotAt = Date.now();
     if (REPORT) fetch(`/__app?n=${out.shot.n}&t=${out.shot.t}&score=${out.shot.score}`
