@@ -99,6 +99,9 @@
 </div>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
+<!-- 版本号：打包时会替换 dcb8ec09ad（见 tools/build_deploy.py）。
+     左下角能让用户一眼确认手机上跑的是不是新版 -->
+<div class="k" id="ver" style="position:fixed;left:12px;bottom:calc(26px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none"></div>
 <div id="cardMask" onclick="hideCard()"></div>
 <div id="card" class="closed"></div>
 
@@ -298,6 +301,11 @@ function withTimeout(promise, ms, message) {
     new Promise((_, rej) => setTimeout(() => rej(new Error(message)), ms)),
   ]);
 }
+
+// 版本号：打包时被替换成内容哈希（和 Service Worker 的缓存版本同一个值），
+// 本地直接打开则是 dev。目的是让用户一眼看出手机上跑的是不是刚发布的那版。
+const APP_VERSION = 'dcb8ec09ad';
+$('ver').textContent = '手机版 · ' + (APP_VERSION.startsWith('__') ? 'dev' : APP_VERSION);
 
 // 问 Service Worker 缓存了多少东西，够了就说明断网也能用
 let offlineTimer = 0;
@@ -641,7 +649,8 @@ if (REPORT) setInterval(() => {
     + `&frames=${hbFrames}&posed=${hbPosed}&boot=${$('boot').classList.contains('hide') ? 1 : 0}`
     + `&msg=${encodeURIComponent($('bootmsg').textContent.slice(0, 380))}`
     + `&vh=${video.videoHeight || 0}&rs=${video.readyState}&err=${video.error ? video.error.code : 0}&lm=${landmarker ? 1 : 0}&src=${encodeURIComponent((video.currentSrc||'').slice(-24))}`
-    + `&orient=${sideways ? 1 : 0}&sideN=${sideN}&small=${tooSmall ? 1 : 0}&pct=${smallPct}&odbg=${odbg}`).catch(() => {});
+    + `&orient=${sideways ? 1 : 0}&sideN=${sideN}&small=${tooSmall ? 1 : 0}&pct=${smallPct}&odbg=${odbg}`
+    + `&ver=${encodeURIComponent(APP_VERSION)}`).catch(() => {});
   hbFrames = hbPosed = 0;
 }, 2000);
 
