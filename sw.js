@@ -7,7 +7,7 @@
  * 装机时预取第一类，第二类在页面等 SW 就绪之后才开始下载，所以都能被拦到。
  */
 
-const VERSION = 'bball-699509c0b9';   // 打包时替换成内容版本，改了代码缓存会自动更新
+const VERSION = 'bball-9ffb946da5';   // 打包时替换成内容版本，改了代码缓存会自动更新
 
 
 // 预取：页面 + 分析代码 + 姿态模型
@@ -63,6 +63,7 @@ self.addEventListener('fetch', (e) => {
     try {
       const res = await fetch(req);
       // 缓存同源资源和 CDN 资源（只缓存正常的完整响应）
+      // 只缓存能读到的响应：opaque（跨域脚本标签之类）读不到内容，也验不了
       if (res && res.status === 200 && (res.type === 'basic' || res.type === 'cors')) {
         const copy = res.clone();
         caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});

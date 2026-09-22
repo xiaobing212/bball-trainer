@@ -99,7 +99,9 @@ window.addEventListener('error', e => {
         + '&line=' + e.lineno + '&col=' + e.colno).catch(() => {});
 });
 </script>
-<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<!-- crossorigin 必须有：不加的话浏览器按"不透明响应"处理这个脚本，
+     Service Worker 无法把它存进离线缓存 → 断网时打不开 -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js" crossorigin="anonymous"></script>
 <script type="module">
 import { PoseLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
