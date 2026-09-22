@@ -270,6 +270,7 @@ function withTimeout(promise, ms, message) {
 }
 
 // 问 Service Worker 缓存了多少东西，够了就说明断网也能用
+let offlineTimer = 0;
 function checkOffline() {
   const el = document.getElementById('offline');
   if (!el) return;
@@ -278,16 +279,23 @@ function checkOffline() {
     el.style.color = 'var(--warn)';
     return;
   }
+  const NAMES = { pyodide: 'Python 运行环境', numpy: 'numpy', opencv: 'OpenCV（约 45MB，最慢）',
+                  mediapipe: '姿态识别库', model: '姿态模型', code: '分析代码' };
   const onMsg = (e) => {
     if (!e.data || e.data.type !== 'cache-status') return;
     navigator.serviceWorker.removeEventListener('message', onMsg);
     const mb = e.data.bytes / 1048576;
-    if (mb > 40) {
+    const missing = Object.entries(e.data.key || {})
+      .filter(([, ok]) => !ok).map(([k]) => NAMES[k] || k);
+    if (!missing.length) {
       el.textContent = `✅ 已可离线使用（缓存 ${mb.toFixed(0)}MB，断网也能开）`;
       el.style.color = 'var(--ok)';
+      clearInterval(offlineTimer); offlineTimer = 0;
     } else {
-      el.textContent = `⚠️ 缓存还不全（${mb.toFixed(0)}MB），联网再打开一次`;
+      el.textContent = `⏳ 正在缓存：还差 ${missing.join('、')}（已 ${mb.toFixed(0)}MB）`
+                     + ' —— 保持页面打开别关，跟到 100% 就好';
       el.style.color = 'var(--warn)';
+      if (!offlineTimer) offlineTimer = setInterval(checkOffline, 15000);   // 没齐就每 15 秒刷新进度
     }
   };
   navigator.serviceWorker.addEventListener('message', onMsg);
@@ -570,9 +578,12 @@ async function boot() {
     }
     msg('1/4 下载并启动 Python 运行时（约 10MB，第一次较慢）…');
     pyodide = await loadPyodide({ indexURL: PYODIDE_URL });
-    msg('2/4 加载 numpy 与 OpenCV（约 60MB，第一次较久）…');
-    await pyodide.loadPackage("numpy");
-    await pyodide.loadPackage("opencv-python");
+    msg('2/4 加载 numpy…');
+    await withTimeout(pyodide.loadPackage("numpy"), 90000, 'numpy 下载超时（网络太慢）');
+    msg('2/4 加载 OpenCV（约 45MB，最慢的一步）…');
+    await withTimeout(pyodide.loadPackage("opencv-python"), 180000,
+      'OpenCV 下载超时。它约 45MB，网速慢时第一次会花几分钟——'
+      + '找个信号好的地方重新打开，或者分几次打开（已下好的部分会留着，下次接着下）');
     msg('3/4 载入分析代码…');
     pyodide.FS.mkdirTree('/bball');
     for (const f of PY_FILES) {

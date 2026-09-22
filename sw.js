@@ -7,7 +7,7 @@
  * 装机时预取第一类，第二类在页面等 SW 就绪之后才开始下载，所以都能被拦到。
  */
 
-const VERSION = 'bball-f4399145a8';   // 打包时替换成内容版本，改了代码缓存会自动更新
+const VERSION = 'bball-0feccc1f79';   // 打包时替换成内容版本，改了代码缓存会自动更新
 
 
 // 预取：页面 + 分析代码 + 姿态模型
@@ -89,6 +89,17 @@ self.addEventListener('message', (e) => {
       if (len) { bytes += Number(len); continue; }
       try { bytes += (await res.clone().blob()).size; } catch (_) {}
     }
-    e.source && e.source.postMessage({ type: 'cache-status', count: keys.length, bytes });
+    // 顺便看关键的那几样齐没齐（用户最想知道"还差什么、还差多少"）
+    const urls = keys.map((r) => r.url);
+    const has = (pat) => urls.some((u) => pat.test(u));
+    const key = {
+      pyodide: has(/pyodide\.js$/) && has(/pyodide\.asm\.wasm$/),
+      numpy: has(/numpy-.*\.whl$/),
+      opencv: has(/opencv_python-.*\.whl$/),
+      mediapipe: has(/tasks-vision.*vision_bundle\.mjs$/),
+      model: has(/pose_landmarker_full\.task$/),
+      code: has(/bball\/ball\.py$/),
+    };
+    e.source && e.source.postMessage({ type: 'cache-status', count: keys.length, bytes, key });
   })());
 });
