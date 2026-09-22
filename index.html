@@ -59,6 +59,9 @@
   .iss.info{background:#1a2433;border-color:#26405a}.iss.info b{color:#8ab8ff}
   .iss.good{background:#14291d;border-color:#245c38}.iss.good b{color:#8ef0b0}
   .iss .a{color:var(--muted);font-size:12.5px}
+  #warn{position:fixed;left:12px;right:12px;top:calc(46px + env(safe-area-inset-top));
+    z-index:6;display:none;background:#ffb020f5;color:#1a1200;border-radius:12px;
+    padding:10px 12px;font-size:13.5px;line-height:1.45;pointer-events:none;text-align:center}
   #boot{position:fixed;inset:0;background:#0f1115;display:grid;place-content:center;
     padding:28px;text-align:center;gap:10px}
   #boot.hide{display:none}
@@ -77,6 +80,7 @@
   <span class="k" id="cons"></span>
   <span class="n" id="made" style="margin-left:8px">0</span><span class="k">进</span>
 </div>
+<div id="warn"></div>
 <div id="sizeBox" style="display:none;position:fixed;left:12px;right:12px;
   bottom:calc(64px + env(safe-area-inset-bottom));z-index:5;background:#11151cf2;border:1px solid #2a2f39;
   border-radius:14px;padding:12px 14px">
@@ -636,9 +640,88 @@ if (REPORT) setInterval(() => {
   fetch(`/__hb?status=${encodeURIComponent($('status').textContent)}&fps=${fpsEma.toFixed(1)}`
     + `&frames=${hbFrames}&posed=${hbPosed}&boot=${$('boot').classList.contains('hide') ? 1 : 0}`
     + `&msg=${encodeURIComponent($('bootmsg').textContent.slice(0, 380))}`
-    + `&vh=${video.videoHeight || 0}&rs=${video.readyState}&err=${video.error ? video.error.code : 0}&lm=${landmarker ? 1 : 0}&src=${encodeURIComponent((video.currentSrc||'').slice(-24))}`).catch(() => {});
+    + `&vh=${video.videoHeight || 0}&rs=${video.readyState}&err=${video.error ? video.error.code : 0}&lm=${landmarker ? 1 : 0}&src=${encodeURIComponent((video.currentSrc||'').slice(-24))}`
+    + `&orient=${sideways ? 1 : 0}&sideN=${sideN}&small=${tooSmall ? 1 : 0}&pct=${smallPct}&odbg=${odbg}`).catch(() => {});
   hbFrames = hbPosed = 0;
 }, 2000);
+
+// ---- 三条「看起来正常、其实已经失效」的提示 ----
+// 按优先级共用一条横幅：方向 > 人太小 > 记录太长。都是静默失败，
+// 不提示的话用户只会看到"投了球但一直是 0"，无从下手。
+let sideN = 0, upN = 0, sideways = false;
+let sizeN = 0, bigN = 0, tooSmall = false, smallPct = 0;
+let longWarn = false, odbg = '';
+
+function setWarn() {
+  const msg = sideways
+    ? '📱 画面躺倒了，现在统计不到投篮——打开手机「自动旋转」，'
+      + '把手机转到画面正的方向（预览里人应该是竖着的）'
+    : tooSmall
+    ? `📏 球员太小：只占画面高度 ${smallPct}%（投篮会漏检）——走近一点，或把手机挪近`
+    : longWarn
+    ? '💾 这一段太长了，再录会开始丢数据——建议点「新场」先存一份'
+    : '';
+  const el = $('warn');
+  if (el._msg === msg) return;
+  el._msg = msg;
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+}
+
+// 方向：手机锁了「自动旋转」又横着架时，相机画面整体躺倒 90°。
+// 姿态照样能识别（骨架也画得对），但出手检测用的是画面里的"上"，
+// 人会一直被判成"没举球"——2026-09-22 球场实测：真投 3 个，一投都没检出。
+// 判据用像素：站着的人从头到脚是竖的，躺倒的人从头到脚是横的。
+function checkOrientation(lm) {
+  if (!lm) return;
+  const need = [0, 11, 12, 23, 24, 27, 28];   // 鼻尖 + 双肩 + 双髋 + 双踝
+  if (need.some(i => (lm[i].visibility ?? 1) < 0.5)) return;
+  const vw = video.videoWidth || 720, vh = video.videoHeight || 1280;
+  const ax = (lm[27].x + lm[28].x) / 2, ay = (lm[27].y + lm[28].y) / 2;
+  const shx = (lm[11].x + lm[12].x) / 2, shy = (lm[11].y + lm[12].y) / 2;
+  const hx = (lm[23].x + lm[24].x) / 2, hy = (lm[23].y + lm[24].y) / 2;
+  // 全身轴（踝中点→鼻尖）和躯干轴都横过来才算：只看躯干的话，弯腰捡球会误报
+  const bodyX = Math.abs(lm[0].x - ax) * vw, bodyY = Math.abs(lm[0].y - ay) * vh;
+  const torX = Math.abs(shx - hx) * vw, torY = Math.abs(shy - hy) * vh;
+  // 实测（2026-09-22 录屏）：躺倒时 X/Y ≈ 17，正常时 ≈ 0.1，所以比例判据很硬；
+  // 幅度下限只用来挡"关键点乱跳"的垃圾帧，不能定太高（人站得远时本来就小）
+  const isSide = bodyX > 1.8 * bodyY && bodyX > 0.10 * vw && torX > 1.5 * torY;
+  odbg = `bx${(bodyX / vw).toFixed(2)}by${(bodyY / vh).toFixed(2)}tx${(torX / vw).toFixed(2)}ty${(torY / vh).toFixed(2)}mv${Math.min(...need.map(i => lm[i].visibility ?? 1)).toFixed(1)}`;
+  if (isSide) { sideN++; upN = 0; } else { upN++; sideN = 0; }
+  if (!sideways && sideN >= 8) sideways = true;
+  else if (sideways && upN >= 20) sideways = false;
+}
+
+// 构图：人太小时关键点会时断时续，出手漏检（2026-09-21 实测：占 24% 时 10 投只认出 5 投）。
+// 两个关键设计：
+//   ① 基准用画面**短边**：横屏时短边是高、竖屏时短边是宽，这样横竖屏同一套阈值
+//      （只用高度归一化的话，同样是 720p，竖屏算出来只有横屏的一半，会误报）。
+//   ② 看最近 5 秒的**峰值**而不是瞬时值：下蹲、弯腰、走远都会让人变小，
+//      但真正"站定投篮"时的大小才是判据。实测过 5 段历史录像：正常局 0 次误报，
+//      3 分线那局只在走到场边的几段提示（共 7% 时长）。
+const MIN_PLAYER_RATIO = 0.26;
+const ratioWin = [];
+function checkFraming(lm) {
+  if (!lm || !video.videoWidth) return;
+  let y0 = 1, y1 = 0, n = 0;
+  for (const p of lm) if ((p.visibility ?? 1) > 0.5) { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); n++; }
+  if (n < 12) return;                       // 可见点太少，量不准
+  const vw = video.videoWidth, vh = video.videoHeight;
+  ratioWin.push((y1 - y0) * vh / Math.min(vw, vh));
+  const cap = Math.round(5 * (fpsEma || 30));           // 5 秒
+  while (ratioWin.length > Math.max(30, cap)) ratioWin.shift();
+  if (ratioWin.length < 20) return;                     // 样本太少，先不判
+  const peak = Math.max(...ratioWin);
+  smallPct = Math.round(peak * 100);
+  if (sideways) { tooSmall = false; sizeN = 0; return; }   // 躺倒时量的是"厚度"，不算数
+  if (!tooSmall) {
+    if (peak < MIN_PLAYER_RATIO) { if (++sizeN >= 30) tooSmall = true; } else sizeN = 0;
+  } else if (peak > MIN_PLAYER_RATIO + 0.03) { if (++bigN >= 30) { tooSmall = false; bigN = 0; } } else bigN = 0;
+}
+
+// 记录缓冲有上限（见 loop：超过就不再往里写），别让用户莫名其妙丢数据
+const REC_LIMIT = 110000;
+function checkRecLength() { longWarn = rec.lines.length >= REC_LIMIT * 0.55; }
 
 let fpsEma = 0, lastT = 0;
 async function loop() {
@@ -657,6 +740,10 @@ async function loop() {
   const lm = res?.landmarks?.[0] || null;
   hbFrames++; if (lm) hbPosed++;
   draw(lm);
+  checkOrientation(lm);
+  checkFraming(lm);
+  checkRecLength();
+  setWarn();
 
   if (cropBox) feedBallWatch();      // 正在跟踪球：裁一小块喂给判定
 
