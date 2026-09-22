@@ -81,12 +81,15 @@
   <input id="rimSize" type="range" min="0.3" max="3" step="0.05" value="1" style="width:100%">
   <button id="sizeDone" style="width:100%;margin-top:8px;padding:9px;font-size:14px">✓ 好了</button>
 </div>
-<button id="voice" style="position:fixed;left:96px;bottom:calc(16px + env(safe-area-inset-bottom));
-  z-index:5;padding:9px 12px;font-size:13px;border-radius:20px;background:#1c1f26cc;
-  border:1px solid #3ddc84;color:#8ef0b0">🔊 语音开</button>
+<button id="newsess" style="position:fixed;left:96px;bottom:calc(16px + env(safe-area-inset-bottom));
+  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
+  border:1px solid #444;color:#e8eaed">🆕 新的一场</button>
+<button id="voice" style="position:fixed;left:184px;bottom:calc(16px + env(safe-area-inset-bottom));
+  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
+  border:1px solid #3ddc84;color:#8ef0b0">🔊 语音</button>
 <button id="save" style="position:fixed;left:12px;bottom:calc(16px + env(safe-area-inset-bottom));
-  z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;
-  border:1px solid #444;color:#e8eaed">💾 保存数据</button>
+  z-index:5;padding:9px 12px;font-size:12px;border-radius:20px;background:#1c1f26cc;
+  border:1px solid #444;color:#e8eaed">💾 保存</button>
 <button id="calib" style="position:fixed;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;border:1px solid #444;color:#e8eaed">🎯 标定篮筐</button>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
@@ -211,11 +214,18 @@ def feed_watch(buf, w, h, t):
         out["verdict"] = watcher.verdict()
     return json.dumps(out)
 
+_last_fps = 30.0
+
 def init(fps, side="auto"):
-    global analyzer, shots
-    analyzer = LiveAnalyzer(fps=float(fps), side=side, cfg=cfg, live_cfg=LiveConfig())
+    global analyzer, shots, _last_fps
+    _last_fps = float(fps)
+    analyzer = LiveAnalyzer(fps=_last_fps, side=side, cfg=cfg, live_cfg=LiveConfig())
     shots = []
     return True
+
+def reset():
+    """开始新的一场：投篮编号和一致性都重新算（数据靠页面那边先存下来）。"""
+    return init(_last_fps)
 
 def push(flat):
     """flat: JS 的 Float32Array(132)，必须 copy —— 缓冲区每帧复用，不 copy 会让历史帧全变成同一帧。"""
@@ -255,7 +265,7 @@ const DOTS = [
   ["跟随动作", "follow_through_s", "sec", [[0.5, 9], [0.35, 0.5], [0.25, 0.35]]],
 ];
 
-let pyodide, pushFn, landmarker, startWatchFn, feedWatchFn;
+let pyodide, pushFn, landmarker, startWatchFn, feedWatchFn, resetFn;
 let rimNorm = null;                 // {cx, cy} 归一化筐心，存 localStorage
 let cropBox = null;                 // 正在跟踪时，要从画面裁哪一块
 let cropCanvas = null, cropCtx = null;
@@ -444,12 +454,12 @@ document.addEventListener('touchstart', function warm() {
 $('voice').onclick = () => {
   voiceOn = !voiceOn;
   localStorage.setItem('voice_on', voiceOn ? '1' : '0');
-  $('voice').textContent = voiceOn ? '🔊 语音开' : '🔇 语音关';
+  $('voice').textContent = voiceOn ? '🔊 语音' : '🔇 语音';
   $('voice').style.borderColor = voiceOn ? '#3ddc84' : '#444';
   $('voice').style.color = voiceOn ? '#8ef0b0' : '#98a0ad';
   if (voiceOn) speak('语音已打开');
 };
-if (!voiceOn) { $('voice').textContent = '🔇 语音关'; $('voice').style.borderColor = '#444'; $('voice').style.color = '#98a0ad'; }
+if (!voiceOn) { $('voice').textContent = '🔇 语音'; $('voice').style.borderColor = '#444'; $('voice').style.color = '#98a0ad'; }
 
 // 把这次记录导出成一个文件：关键点（和电脑端 keypoints.csv 同一格式）
 // + 本次投篮明细 + 进球判定。回家丢给 tools/analyze_session.py 就能出完整报告。
@@ -457,7 +467,7 @@ function saveSession() {
   if (!rec.lines.length) { alert('还没有记录到画面'); return; }
   const span = rec.lastT - rec.firstT;
   const fps = span > 1 ? (rec.n - 1) / span : 30;
-  const header = ['# 手机端记录：投篮训练助手', `# fps=${fps.toFixed(2)}`,
+  const header = ['# 手机端记录：投篮训练助手', `# session=${sessionNo}`, `# fps=${fps.toFixed(2)}`,
     `# width=${rec.w}`, `# height=${rec.h}`, `# frames=${rec.n}`,
     "# smoothed=false（手机存的是原始关键点，分析时要补洞+平滑）",
     '# shots=' + JSON.stringify(rec.shots),
@@ -468,13 +478,37 @@ function saveSession() {
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '').slice(2);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = `bball_${stamp}.csv`;
+  a.download = `bball_${stamp}_第${sessionNo}场.csv`;
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
-  $('save').textContent = `💾 已导出 ${rec.shots.length} 投`;
-  setTimeout(() => { $('save').textContent = '💾 保存数据'; }, 4000);
+  $('save').textContent = `💾 已存 ${rec.shots.length} 投`;
+  setTimeout(() => { $('save').textContent = '💾 保存'; }, 4000);
 }
 $('save').onclick = saveSession;
+
+// 开始新的一场：**先把当前这场自动导出**（不然一刷新或一重置就全没了），再清空重来
+let sessionNo = Number(localStorage.getItem('session_no') || 0) + 1;
+$('newsess').onclick = () => {
+  if (rec.shots.length) {
+    saveSession();
+    setTimeout(() => {
+      if (confirm(`这一场 ${rec.shots.length} 投已导出。\n开始新的一场？\n（文件在手机的"下载/文件"里）`)) startNewSession();
+    }, 500);
+  } else if (confirm('这一场还没有投篮记录。\n开始新的一场？')) {
+    startNewSession();
+  }
+};
+function startNewSession() {
+  sessionNo = Number(localStorage.getItem('session_no') || 0) + 1;
+  localStorage.setItem('session_no', sessionNo);
+  rec = { lines: [], n: 0, shots: [], t0: 0, w: 0, h: 0 };
+  madeCount = 0; ballPts = []; cropBox = null;
+  $('made').textContent = '0'; $('cnt').textContent = '0'; $('cons').textContent = '';
+  if (resetFn) { try { resetFn(); } catch (e) {} }
+  $('card').classList.remove('show');
+  $('newsess').textContent = `🆕 第 ${sessionNo} 场`;
+  setTimeout(() => { $('newsess').textContent = '🆕 新的一场'; }, 3000);
+}
 
 // 点一下画面标定篮筐中心
 // 卡片上的关闭按钮每次 innerHTML 都会重建，用事件委托
@@ -720,6 +754,7 @@ async function boot() {
     pyodide.globals.get("init")(fps);
     pushFn = pyodide.globals.get("push");
     startWatchFn = pyodide.globals.get("start_watch");
+    resetFn = pyodide.globals.get("reset");
     feedWatchFn = pyodide.globals.get("feed_watch");
     try {
       const saved = JSON.parse(localStorage.getItem('rim_norm') || 'null');
