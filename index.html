@@ -81,6 +81,9 @@
   <input id="rimSize" type="range" min="0.3" max="3" step="0.05" value="1" style="width:100%">
   <button id="sizeDone" style="width:100%;margin-top:8px;padding:9px;font-size:14px">✓ 好了</button>
 </div>
+<button id="voice" style="position:fixed;left:96px;bottom:calc(16px + env(safe-area-inset-bottom));
+  z-index:5;padding:9px 12px;font-size:13px;border-radius:20px;background:#1c1f26cc;
+  border:1px solid #3ddc84;color:#8ef0b0">🔊 语音开</button>
 <button id="save" style="position:fixed;left:12px;bottom:calc(16px + env(safe-area-inset-bottom));
   z-index:5;padding:9px 14px;font-size:13px;border-radius:20px;background:#1c1f26cc;
   border:1px solid #444;color:#e8eaed">💾 保存数据</button>
@@ -420,6 +423,34 @@ function feedBallWatch() {
   }
 }
 
+// 语音播报：手机上眼睛看着篮筐、不看屏幕，语音才是真正能用的反馈。
+// 浏览器自带 speechSynthesis（电脑端用的是 macOS 的 say，手机上没有那个命令）。
+let voiceOn = localStorage.getItem('voice_on') !== '0';
+function speak(text) {
+  if (!voiceOn || !window.speechSynthesis) return;
+  try {
+    speechSynthesis.cancel();                 // 别排队，只说最新的一条
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'zh-CN'; u.rate = 1.15;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+// iOS 要求先有用户操作才允许发声，第一次点屏幕时"预热"一下
+document.addEventListener('touchstart', function warm() {
+  try { const u = new SpeechSynthesisUtterance(''); speechSynthesis.speak(u); } catch (e) {}
+  document.removeEventListener('touchstart', warm);
+}, { once: true });
+
+$('voice').onclick = () => {
+  voiceOn = !voiceOn;
+  localStorage.setItem('voice_on', voiceOn ? '1' : '0');
+  $('voice').textContent = voiceOn ? '🔊 语音开' : '🔇 语音关';
+  $('voice').style.borderColor = voiceOn ? '#3ddc84' : '#444';
+  $('voice').style.color = voiceOn ? '#8ef0b0' : '#98a0ad';
+  if (voiceOn) speak('语音已打开');
+};
+if (!voiceOn) { $('voice').textContent = '🔇 语音关'; $('voice').style.borderColor = '#444'; $('voice').style.color = '#98a0ad'; }
+
 // 把这次记录导出成一个文件：关键点（和电脑端 keypoints.csv 同一格式）
 // + 本次投篮明细 + 进球判定。回家丢给 tools/analyze_session.py 就能出完整报告。
 function saveSession() {
@@ -601,6 +632,8 @@ async function loop() {
     $('cnt').textContent = out.shot.n;
     $('cons').textContent = out.cons != null ? `一致性 ${Math.round(out.cons)}` : '';
     showShot(out);
+    speak(out.shot.issues.length ? `第${out.shot.n}投，${out.shot.issues[0].title}`
+                                 : `第${out.shot.n}投，好球，动作标准`);
     rec.shots.push({ n: out.shot.n, t: out.shot.t, score: out.shot.score,
                      issues: out.shot.issues.map(i => i.title), verdict: null });
     startBallWatch(out.shot, fpsEma > 5 ? fpsEma : 30);
