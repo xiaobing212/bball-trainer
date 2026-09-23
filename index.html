@@ -19,7 +19,11 @@
   #top .n{font-size:22px;font-weight:800}
   #top .k{color:var(--muted);font-size:12px}
   /* 竖屏：底部抽屉；横屏：右侧面板 —— 横屏时从底下弹会挡住画面 */
-  #card{position:fixed;background:#11151cf7;border:1px solid var(--line);
+  /* 半透明 + 背景虚化（毛玻璃）：弹出时还能看见场上的动静，字也仍然清楚。
+     2026-09-23 用户反馈"卡片挡住画面"，原先是 97% 不透明 */
+  #card{position:fixed;background:#0d1117b8;border:1px solid var(--line);
+    -webkit-backdrop-filter:blur(14px) saturate(1.15);
+    backdrop-filter:blur(14px) saturate(1.15);
     padding:12px 14px calc(12px + env(safe-area-inset-bottom));
     transition:transform .25s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
   #card.closed{pointer-events:none}
@@ -48,7 +52,7 @@
   #card .score{font-size:40px;font-weight:800;line-height:1}
   #card .score.good{color:var(--ok)}#card .score.mid{color:var(--warn)}#card .score.bad{color:var(--bad)}
   .dots{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:5px;margin-bottom:9px}
-  .dot{background:#161a21;border-radius:9px;padding:6px 2px;text-align:center}
+  .dot{background:#161a21cc;border-radius:9px;padding:6px 2px;text-align:center}
   .dot .nm{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden}
   .dot .vv{font-size:14px;font-weight:700;margin:2px 0}
   .dot .marks{display:flex;gap:2px;justify-content:center}
@@ -99,7 +103,7 @@
 </div>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
-<!-- 版本号：打包时会替换 dcb8ec09ad（见 tools/build_deploy.py）。
+<!-- 版本号：打包时会替换 6bfccca491（见 tools/build_deploy.py）。
      左下角能让用户一眼确认手机上跑的是不是新版 -->
 <div class="k" id="ver" style="position:fixed;left:12px;bottom:calc(26px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none"></div>
 <div id="cardMask" onclick="hideCard()"></div>
@@ -236,6 +240,19 @@ def reset():
     """开始新的一场：投篮编号和一致性都重新算（数据靠页面那边先存下来）。"""
     return init(_last_fps)
 
+def set_fps(fps):
+    """就地改正帧率（不重置状态）。
+
+    手机声明的相机帧率（30）往往远高于实际处理帧率（实测 16.85），而 LiveAnalyzer
+    的时间、速度、窗口全按 fps 换算——用错会让举球速度偏 1.8 倍、出手时刻也偏，
+    离线报告就跟手机记的对不上（2026-09-23 实测：8 投只有 1 投时间对得上）。
+    这里只改数值，不动已攒的缓冲，所以切摄像头、掉帧之后都能随时跟上。"""
+    global _last_fps
+    _last_fps = float(fps)
+    if analyzer is not None:
+        analyzer.fps = _last_fps
+    return True
+
 def push(flat):
     """flat: JS 的 Float32Array(132)，必须 copy —— 缓冲区每帧复用，不 copy 会让历史帧全变成同一帧。"""
     lm = np.array(flat, dtype=np.float32).reshape(33, 4)
@@ -274,7 +291,9 @@ const DOTS = [
   ["跟随动作", "follow_through_s", "sec", [[0.5, 9], [0.35, 0.5], [0.25, 0.35]]],
 ];
 
-let pyodide, pushFn, landmarker, startWatchFn, feedWatchFn, resetFn;
+let pyodide, pushFn, landmarker, startWatchFn, feedWatchFn, resetFn, setFpsFn;
+// 实测帧率：声明值和实际差很多（30 vs 16.85），所以每 3 秒量一次，偏了就纠正
+let fpsMeasT0 = 0, fpsMeasN = 0, fpsUsed = 0;
 let rimNorm = null;                 // {cx, cy} 归一化筐心，存 localStorage
 let cropBox = null;                 // 正在跟踪时，要从画面裁哪一块
 let cropCanvas = null, cropCtx = null;
@@ -304,7 +323,7 @@ function withTimeout(promise, ms, message) {
 
 // 版本号：打包时被替换成内容哈希（和 Service Worker 的缓存版本同一个值），
 // 本地直接打开则是 dev。目的是让用户一眼看出手机上跑的是不是刚发布的那版。
-const APP_VERSION = 'dcb8ec09ad';
+const APP_VERSION = '6bfccca491';
 $('ver').textContent = '手机版 · ' + (APP_VERSION.startsWith('__') ? 'dev' : APP_VERSION);
 
 // 问 Service Worker 缓存了多少东西，够了就说明断网也能用
@@ -649,7 +668,7 @@ if (REPORT) setInterval(() => {
     + `&frames=${hbFrames}&posed=${hbPosed}&boot=${$('boot').classList.contains('hide') ? 1 : 0}`
     + `&msg=${encodeURIComponent($('bootmsg').textContent.slice(0, 380))}`
     + `&vh=${video.videoHeight || 0}&rs=${video.readyState}&err=${video.error ? video.error.code : 0}&lm=${landmarker ? 1 : 0}&src=${encodeURIComponent((video.currentSrc||'').slice(-24))}`
-    + `&orient=${sideways ? 1 : 0}&sideN=${sideN}&small=${tooSmall ? 1 : 0}&pct=${smallPct}&odbg=${odbg}`
+    + `&orient=${sideways ? 1 : 0}&sideN=${sideN}&small=${tooSmall ? 1 : 0}&pct=${smallPctLive}&odbg=${odbg}`
     + `&ver=${encodeURIComponent(APP_VERSION)}`).catch(() => {});
   hbFrames = hbPosed = 0;
 }, 2000);
@@ -658,7 +677,7 @@ if (REPORT) setInterval(() => {
 // 按优先级共用一条横幅：方向 > 人太小 > 记录太长。都是静默失败，
 // 不提示的话用户只会看到"投了球但一直是 0"，无从下手。
 let sideN = 0, upN = 0, sideways = false;
-let sizeN = 0, bigN = 0, tooSmall = false, smallPct = 0;
+let sizeN = 0, bigN = 0, tooSmall = false, smallPctLive = 0, smallPctWarn = 0;
 let longWarn = false, odbg = '';
 
 function setWarn() {
@@ -666,7 +685,7 @@ function setWarn() {
     ? '📱 画面躺倒了，现在统计不到投篮——打开手机「自动旋转」，'
       + '把手机转到画面正的方向（预览里人应该是竖着的）'
     : tooSmall
-    ? `📏 球员太小：只占画面高度 ${smallPct}%（投篮会漏检）——走近一点，或把手机挪近`
+    ? `📏 球员太小：只占画面高度 ${smallPctWarn}%（投篮会漏检）——走近一点，或把手机挪近`
     : longWarn
     ? '💾 这一段太长了，再录会开始丢数据——建议点「新场」先存一份'
     : '';
@@ -684,7 +703,9 @@ function setWarn() {
 function checkOrientation(lm) {
   if (!lm) return;
   const need = [0, 11, 12, 23, 24, 27, 28];   // 鼻尖 + 双肩 + 双髋 + 双踝
-  if (need.some(i => (lm[i].visibility ?? 1) < 0.5)) return;
+  // 0.7 而不是 0.5：画面里没人时模型会"硬认"出姿势，可见度恰好卡在 0.5 附近
+  // （2026-09-23 球场实测：空场地画面 → 提示条误报 11 次，复现条件就是 mv=0.5）
+  if (need.some(i => (lm[i].visibility ?? 1) < 0.7)) return;
   const vw = video.videoWidth || 720, vh = video.videoHeight || 1280;
   const ax = (lm[27].x + lm[28].x) / 2, ay = (lm[27].y + lm[28].y) / 2;
   const shx = (lm[11].x + lm[12].x) / 2, shy = (lm[11].y + lm[12].y) / 2;
@@ -692,12 +713,11 @@ function checkOrientation(lm) {
   // 全身轴（踝中点→鼻尖）和躯干轴都横过来才算：只看躯干的话，弯腰捡球会误报
   const bodyX = Math.abs(lm[0].x - ax) * vw, bodyY = Math.abs(lm[0].y - ay) * vh;
   const torX = Math.abs(shx - hx) * vw, torY = Math.abs(shy - hy) * vh;
-  // 实测（2026-09-22 录屏）：躺倒时 X/Y ≈ 17，正常时 ≈ 0.1，所以比例判据很硬；
-  // 幅度下限只用来挡"关键点乱跳"的垃圾帧，不能定太高（人站得远时本来就小）
-  const isSide = bodyX > 1.8 * bodyY && bodyX > 0.10 * vw && torX > 1.5 * torY;
+  // 真正躺倒是 6~17 倍（实测），误报那次只有 2.8 倍 → 阈值定 3 倍能把误报挡掉
+  const isSide = bodyX > 3.0 * bodyY && bodyX > 0.10 * vw && torX > 1.5 * torY;
   odbg = `bx${(bodyX / vw).toFixed(2)}by${(bodyY / vh).toFixed(2)}tx${(torX / vw).toFixed(2)}ty${(torY / vh).toFixed(2)}mv${Math.min(...need.map(i => lm[i].visibility ?? 1)).toFixed(1)}`;
   if (isSide) { sideN++; upN = 0; } else { upN++; sideN = 0; }
-  if (!sideways && sideN >= 8) sideways = true;
+  if (!sideways && sideN >= 15) sideways = true;
   else if (sideways && upN >= 20) sideways = false;
 }
 
@@ -708,7 +728,9 @@ function checkOrientation(lm) {
 //   ② 看最近 5 秒的**峰值**而不是瞬时值：下蹲、弯腰、走远都会让人变小，
 //      但真正"站定投篮"时的大小才是判据。实测过 5 段历史录像：正常局 0 次误报，
 //      3 分线那局只在走到场边的几段提示（共 7% 时长）。
-const MIN_PLAYER_RATIO = 0.26;
+// 阈值 20%：2026-09-23 球场实测，26~27% 时出手识别完全正常（三分球就这在个量级），
+// 再按 26% 报警就成了天天响的狼来了。只有真的小到不行才提示。
+const MIN_PLAYER_RATIO = 0.20;
 const ratioWin = [];
 function checkFraming(lm) {
   if (!lm || !video.videoWidth) return;
@@ -721,10 +743,13 @@ function checkFraming(lm) {
   while (ratioWin.length > Math.max(30, cap)) ratioWin.shift();
   if (ratioWin.length < 20) return;                     // 样本太少，先不判
   const peak = Math.max(...ratioWin);
-  smallPct = Math.round(peak * 100);
+  smallPctLive = Math.round(peak * 100);                // 顶部状态栏常显用（实时值）
   if (sideways) { tooSmall = false; sizeN = 0; return; }   // 躺倒时量的是"厚度"，不算数
   if (!tooSmall) {
-    if (peak < MIN_PLAYER_RATIO) { if (++sizeN >= 30) tooSmall = true; } else sizeN = 0;
+    // 提示里的数字要冻结在"触发那一刻"：不然人走回来之后，横幅还在、
+    // 数字却已经涨到 30%+，看着自相矛盾（2026-09-23 实测出现过两次）
+    if (peak < MIN_PLAYER_RATIO) { if (++sizeN >= 30) { tooSmall = true; smallPctWarn = smallPctLive; } }
+    else sizeN = 0;
   } else if (peak > MIN_PLAYER_RATIO + 0.03) { if (++bigN >= 30) { tooSmall = false; bigN = 0; } } else bigN = 0;
 }
 
@@ -732,17 +757,41 @@ function checkFraming(lm) {
 const REC_LIMIT = 110000;
 function checkRecLength() { longWarn = rec.lines.length >= REC_LIMIT * 0.55; }
 
+// 实测「每秒钟真正处理了几帧」，并把它同步给 Python 侧的实时分析器。
+// 为什么必须实测：相机声明的是 30fps，手机实际只能处理 16~17fps（MediaPipe 推理耗时），
+// 而 LiveAnalyzer 的速度/窗口/出手时刻全按 fps 换算——用声明值会让举球速度偏 1.8 倍
+// （门槛形同虚设、更容易误检），出手时刻也偏，离线报告就跟手机记的对不上。
+// 首次 1 秒就结算（尽快纠正），之后每 3 秒结算一次；偏差超 15% 才更新。
+function measureFps() {
+  if (!fpsMeasT0 || video.currentTime < fpsMeasT0) {   // 换摄像头会让 currentTime 归零
+    fpsMeasT0 = video.currentTime; fpsMeasN = 0; return;
+  }
+  fpsMeasN++;
+  const span = video.currentTime - fpsMeasT0;
+  const win = fpsUsed ? 3 : 1;
+  if (span < win) return;
+  const measured = fpsMeasN / span;
+  fpsMeasT0 = video.currentTime; fpsMeasN = 0;
+  if (!(measured > 3 && measured < 120)) return;
+  if (fpsUsed && Math.abs(measured - fpsUsed) / fpsUsed <= 0.15) return;
+  fpsUsed = measured;
+  if (setFpsFn) { try { setFpsFn(Math.round(measured * 10) / 10); } catch (e) {} }
+  if (REPORT) fetch(`/__fps?measured=${measured.toFixed(2)}`).catch(() => {});
+}
+
 let fpsEma = 0, lastT = 0;
 async function loop() {
   requestAnimationFrame(loop);
   if (!landmarker || video.readyState < 2) return;
   if (video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
+  measureFps();                     // 每处理一帧就喂给帧率实测器
 
   const now = performance.now();
   const dt = now - lastT; lastT = now;
   if (dt > 0 && dt < 500) fpsEma = fpsEma ? fpsEma * 0.9 + (1000 / dt) * 0.1 : 1000 / dt;
-  $('fps').textContent = fpsEma.toFixed(0) + ' fps';
+  // 顺带把「人占画面多大」常显出来：用户不用等警告，随时能判断机位够不够近
+  $('fps').textContent = fpsEma.toFixed(0) + ' fps' + (smallPctLive ? ` · 人 ${smallPctLive}%` : '');
 
   let res = null;
   try { res = landmarker.detectForVideo(video, now); } catch (e) { return; }
@@ -864,9 +913,12 @@ async function boot() {
         runningMode: 'VIDEO', numPoses: 1 }), 45000,
         '姿态模型下载超时（网络太慢或访问不了 Google 的模型服务器）');
     }
+    // 先用相机声明的帧率开局，随后 loop 里会用**实测**处理帧率纠正
+    // （声明值常常是 30，实际只有 16~17，用错会让实时分析的时间/速度整体偏 1.8 倍）
     const fps = VIDEO_URL ? 30.0 : (video.getVideoTracks?.()[0]?.getSettings?.().frameRate || 30);
     pyodide.globals.get("init")(fps);
     pushFn = pyodide.globals.get("push");
+    setFpsFn = pyodide.globals.get("set_fps");
     startWatchFn = pyodide.globals.get("start_watch");
     resetFn = pyodide.globals.get("reset");
     feedWatchFn = pyodide.globals.get("feed_watch");
