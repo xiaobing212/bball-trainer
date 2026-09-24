@@ -18,6 +18,8 @@
     background:linear-gradient(#000c,#0000 85%)}
   #top .n{font-size:22px;font-weight:800}
   #top .k{color:var(--muted);font-size:12px}
+  /* 版本号：横屏时并在顶栏（字号跟旁边一致，够看清）；竖屏顶栏太挤，藏起来 */
+  @media (orientation:portrait){ #top #ver{display:none} }
   /* 竖屏：底部抽屉；横屏：右侧面板 —— 横屏时从底下弹会挡住画面 */
   /* 半透明 + 背景虚化（毛玻璃）：弹出时还能看见场上的动静，字也仍然清楚。
      2026-09-23 用户反馈"卡片挡住画面"，原先是 97% 不透明 */
@@ -27,16 +29,27 @@
     padding:12px 14px calc(12px + env(safe-area-inset-bottom));
     transition:transform .25s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
   #card.closed{pointer-events:none}
+  /* 精简态（默认）：只显示 评分 + 进/不进 + 第一条问题；点卡片展开看五项指标（2026-09-24） */
+  #card .more{display:none}
+  #card.open .more{display:block}
+  #card .hint{font-size:12px;color:var(--muted);margin-top:8px;text-align:center}
+  #card.open .hint{display:none}
   @media (orientation:portrait){
-    #card{left:0;right:0;bottom:0;border-radius:16px 16px 0 0;max-height:42vh;
+    /* 竖屏底部抽屉：精简态矮一点，展开时再长高 */
+    #card{left:0;right:0;bottom:0;border-radius:16px 16px 0 0;max-height:32vh;
       transform:translateY(110%)}
+    #card.open{max-height:62vh}
     #card.show{transform:translateY(0)}
   }
   @media (orientation:landscape){
-    #card{right:0;top:0;bottom:0;width:36%;min-width:280px;border-radius:16px 0 0 16px;
-      padding-left:12px;padding-right:calc(12px + env(safe-area-inset-right));max-height:none;
-      transform:translateX(110%)}
+    /* 横屏：不再是「贴满右侧的整条侧栏」，而是一张**只包住内容**的浮层卡片，
+       贴在右上角，宽度最多 26%（用户 2026-09-24 反馈：卡片太大挡视线） */
+    #card{right:10px;left:auto;top:calc(44px + env(safe-area-inset-top));bottom:auto;
+      width:auto;max-width:26vw;min-width:0;border-radius:16px;
+      padding-left:12px;padding-right:12px;max-height:64vh;overflow-y:auto;
+      transform:translateX(115%)}
     #card.show{transform:translateX(0)}
+    #card.open{max-height:80vh}      /* 展开看细节时给足高度，别把最后一条切掉 */
   }
   .ctl{flex:1 1 0;min-width:0;padding:9px 2px;font-size:11.5px;border-radius:18px;
     background:#1c1f26cc;border:1px solid #444;color:#e8eaed;white-space:nowrap;overflow:hidden}
@@ -82,6 +95,7 @@
   <span class="k" id="status">准备中</span>
   <span class="k" style="margin-left:auto" id="fps">-- fps</span>
   <span class="k" id="cons"></span>
+  <span class="k" id="ver" style="margin-left:8px"></span>
   <span class="n" id="made" style="margin-left:8px">0</span><span class="k">进</span>
 </div>
 <div id="warn"></div>
@@ -103,9 +117,8 @@
 </div>
 
 <div class="k" id="offline" style="position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none;max-width:60%"></div>
-<!-- 版本号：打包时会替换 6bfccca491（见 tools/build_deploy.py）。
-     左下角能让用户一眼确认手机上跑的是不是新版 -->
-<div class="k" id="ver" style="position:fixed;left:12px;bottom:calc(26px + env(safe-area-inset-bottom));z-index:4;font-size:11px;color:var(--muted);pointer-events:none"></div>
+<!-- 版本号：打包时会替换 56f3012c2f（见 tools/build_deploy.py）。
+     2026-09-24 从左下角挪到顶部状态栏 —— 原来那行小字又小又容易被底部按钮压住，看不清 -->
 <div id="cardMask" onclick="hideCard()"></div>
 <div id="card" class="closed"></div>
 
@@ -253,10 +266,12 @@ def set_fps(fps):
         analyzer.fps = _last_fps
     return True
 
-def push(flat):
-    """flat: JS 的 Float32Array(132)，必须 copy —— 缓冲区每帧复用，不 copy 会让历史帧全变成同一帧。"""
+def push(flat, t=None):
+    """flat: JS 的 Float32Array(132)，必须 copy —— 缓冲区每帧复用，不 copy 会让历史帧全变成同一帧。
+    t: 这一帧的 video.currentTime（秒）——「出手时刻」用它算，不再用「帧号 ÷ 帧率」
+    （帧率会被实时修正，用它当除数会让出手时刻漂移、甚至倒退）。"""
     lm = np.array(flat, dtype=np.float32).reshape(33, 4)
-    shot = analyzer.push(lm)
+    shot = analyzer.push(lm, float(t) if t is not None else None)
     if shot is None:
         return json.dumps({"status": analyzer.status})
     shots.append(shot)
@@ -323,8 +338,8 @@ function withTimeout(promise, ms, message) {
 
 // 版本号：打包时被替换成内容哈希（和 Service Worker 的缓存版本同一个值），
 // 本地直接打开则是 dev。目的是让用户一眼看出手机上跑的是不是刚发布的那版。
-const APP_VERSION = '6bfccca491';
-$('ver').textContent = '手机版 · ' + (APP_VERSION.startsWith('__') ? 'dev' : APP_VERSION);
+const APP_VERSION = '56f3012c2f';
+$('ver').textContent = APP_VERSION.startsWith('__') ? 'v dev' : 'v' + APP_VERSION;
 
 // 问 Service Worker 缓存了多少东西，够了就说明断网也能用
 let offlineTimer = 0;
@@ -375,21 +390,29 @@ function fmt(v, kind) {
 function showShot(res) {
   const s = res.shot, m = s.m;
   const cls = s.score >= 80 ? 'good' : (s.score >= 60 ? 'mid' : 'bad');
+  // 精简态：第一条（最重要）的问题常显，五项指标和其余问题收进 .more，点卡片才展开
+  const issues = s.issues.length
+    ? s.issues
+    : [{ severity: 'good', title: '动作标准', advice: '这一投没有发现明显问题' }];
+  const iss = i => `<div class="iss ${i.severity}"><b>${i.title}</b><div class="a">${i.advice}</div></div>`;
+  $('card').classList.remove('open');            // 每一投都回到精简态
   $('card').innerHTML = `
-    <button id="closeCard" onclick="hideCard()">✕</button>
+    <button id="closeCard" onclick="event.stopPropagation();hideCard()">✕</button>
     <div class="head"><span class="score ${cls}">${s.score}</span>
       <span class="k">第 ${s.n} 投 · ${s.t}s<br>
       ${s.score >= 80 ? '动作标准' : (s.score >= 60 ? '有可改的地方' : '问题较多')}</span>
       <span id="verdict" style="margin-left:auto;font-size:26px;font-weight:800;color:#98a0ad">--</span></div>
-    <div class="dots">${DOTS.map(([nm, key, kind, bands]) => {
-      const n = marks(m[key], bands);
-      const c = n >= 3 ? 'g' : (n === 2 ? 'y' : 'r');
-      return `<div class="dot"><div class="nm">${nm}</div><div class="vv">${fmt(m[key], kind)}</div>
-        <div class="marks">${[0,1,2,3].map(i => `<i class="${i < n ? c : ''}"></i>`).join('')}</div></div>`;
-    }).join('')}</div>
-    ${s.issues.length
-      ? s.issues.map(i => `<div class="iss ${i.severity}"><b>${i.title}</b><div class="a">${i.advice}</div></div>`).join('')
-      : '<div class="iss good"><b>动作标准</b><div class="a">这一投没有发现明显问题</div></div>'}`;
+    ${iss(issues[0])}
+    <div class="hint">点卡片看五项指标 ▾</div>
+    <div class="more">
+      <div class="dots">${DOTS.map(([nm, key, kind, bands]) => {
+        const n = marks(m[key], bands);
+        const c = n >= 3 ? 'g' : (n === 2 ? 'y' : 'r');
+        return `<div class="dot"><div class="nm">${nm}</div><div class="vv">${fmt(m[key], kind)}</div>
+          <div class="marks">${[0,1,2,3].map(i => `<i class="${i < n ? c : ''}"></i>`).join('')}</div></div>`;
+      }).join('')}</div>
+      ${issues.slice(1).map(iss).join('')}
+    </div>`;
   showCard();
   clearTimeout(hideTimer);
   hideTimer = setTimeout(hideCard, 8000);          // 8 秒自动收起，别一直挡着
@@ -409,6 +432,16 @@ function hideCard() {
   clearTimeout(hideTimer);
 }
 window.hideCard = hideCard;
+
+// 点卡片：在「精简态（评分+进/不进+第一条问题）」和「展开态（含五项指标）」之间切换。
+// 卡片默认精简，是为了少挡画面（用户 2026-09-24 反馈：卡片太大挡视线）。
+function toggleCard() {
+  const c = $('card');
+  c.classList.toggle('open');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(hideCard, c.classList.contains('open') ? 15000 : 8000);
+}
+$('card').onclick = toggleCard;
 
 function startBallWatch(shot, fps) {
   if (!rimNorm || !startWatchFn || cropBox) return;
@@ -823,7 +856,8 @@ async function loop() {
   if (!rec.firstT) rec.firstT = video.currentTime;
   rec.lastT = video.currentTime;
   if (!rec.w) { rec.w = video.videoWidth; rec.h = video.videoHeight; }
-  try { out = JSON.parse(pushFn(buf)); } catch (e) { return; }
+  // 把这一帧的真实时间一起传进去：出手时刻用它算（见 Python 侧 push 的说明）
+  try { out = JSON.parse(pushFn(buf, video.currentTime)); } catch (e) { return; }
   $('status').textContent = out.status;
   if (out.shot) {
     $('cnt').textContent = out.shot.n;

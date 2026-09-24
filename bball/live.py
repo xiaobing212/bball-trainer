@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import sys
 from typing import Optional
 
 import numpy as np
@@ -64,6 +65,14 @@ class LiveAnalyzer:
         self.lcfg = live_cfg or LiveConfig()
         self.frames: deque = deque(maxlen=int(self.lcfg.buffer_seconds * fps))
         self.detected: deque = deque(maxlen=int(self.lcfg.buffer_seconds * fps))
+        # 每帧的时间戳（和 frames 一一对应）。出手时刻用它算，不再用「帧号 ÷ 帧率」——
+        # 帧率估计会被 measureFps 实时修正，一改「同一个帧号」就被换算成不同的秒数，
+        # 实测会出现时刻漂移、甚至倒退（2026-09-24 球场：第 11 投 124.01s、第 12 投 74.12s）。
+        self.times: deque = deque(maxlen=int(self.lcfg.buffer_seconds * fps))
+        self._t_start: Optional[float] = None    # 这一场第一帧的时间（时间原点）
+        self._t_last: Optional[float] = None     # 最近一帧的时间（已含补偿）
+        self._t_raw_last: Optional[float] = None  # 最近一帧的**原始**时间戳（未补偿）
+        self._t_offset = 0.0                     # 时间戳倒退时的补偿（见 _time_for）
         self.torso_scale: Optional[float] = None
         self._v_ema = 0.0
         self._slow_frames = 0
@@ -83,12 +92,16 @@ class LiveAnalyzer:
     def reset_session(self):
         """开始新一次训练：把时间基准归零。
 
-        帧序是自增的，报告里的「出手时刻」用的就是它。不归零的话，
-        时间基准是「程序启动」而不是「按下开始训练」，报告时刻和训练录像对不上
-        （差多少取决于程序开了多久）。
+        出手时刻 = 这一帧的时间戳 - 本场第一帧的时间戳（`self._t_start`），
+        不归零的话时间基准会是「程序启动」而不是「按下开始训练」。
         """
         self.frames.clear()
         self.detected.clear()
+        self.times.clear()
+        self._t_start = None
+        self._t_last = None
+        self._t_raw_last = None
+        self._t_offset = 0.0
         self.frame_idx = 0
         self.state = "idle"
         self._pending_peak_idx = None
@@ -109,10 +122,38 @@ class LiveAnalyzer:
             return "检测到举球"
         return "等待投篮"
 
-    def push(self, landmarks: Optional[np.ndarray]) -> Optional[LiveShot]:
-        """喂入一帧关键点 (33,4)，返回本帧完成的投篮事件（如果有）。"""
+    def _time_for(self, idx: int, t: Optional[float]) -> float:
+        """这一帧的时间戳。
+
+        手机端传的是 `video.currentTime`（真实时间）——出手时刻直接用它算，所以
+        卡片上的秒数和录屏/离线报告天然对得上。没传的（离线回放、测试）按帧率外推，
+        和以前的行为一致。
+        两个兜底：① 切摄像头会让 currentTime 归零 → 用偏移量接上，保证单调；
+        ② 同一会话里混着传/不传也不会跳（不传时接着上一帧外推）。
+        """
+        # 注意：比较和累加都只用**原始**时间戳（_t_raw_last）。用补偿后的值去比，
+        # 偏移量会被每一帧重复累加、指数级放大（实测 3.8s 会涨到 1.9e34）。
+        raw = t if t is not None else (
+            self._t_raw_last + 1.0 / self.fps if self._t_raw_last is not None else idx / self.fps)
+        if self._t_raw_last is not None and raw < self._t_raw_last:
+            self._t_offset += self._t_raw_last - raw + 1.0 / self.fps
+            print(f"[live] 时间戳倒退（{self._t_raw_last:.2f} → {raw:.2f}），"
+                  f"补偿 {self._t_offset:.2f}s", file=sys.stderr)
+        self._t_raw_last = raw
+        self._t_last = raw + self._t_offset
+        if self._t_start is None:
+            self._t_start = self._t_last
+        return self._t_last
+
+    def push(self, landmarks: Optional[np.ndarray],
+             t: Optional[float] = None) -> Optional[LiveShot]:
+        """喂入一帧关键点 (33,4)，返回本帧完成的投篮事件（如果有）。
+
+        t：这一帧的时间戳（秒）。手机端传 `video.currentTime`；离线/测试不传。
+        """
         idx = self.frame_idx
         self.frame_idx += 1
+        self.times.append(self._time_for(idx, t))
         if landmarks is None:
             self.frames.append(np.full((33, 4), np.nan, dtype=np.float32))
             self.detected.append(False)
@@ -240,6 +281,12 @@ class LiveAnalyzer:
         issues = feedback.evaluate_shot(metrics, self.cfg.feedback)
         self.shot_count += 1
         self._last_shot_idx = peak_idx
-        release_time = peak_idx / self.fps
+        # 出手时刻：用这一帧的**真实时间戳**减去本场起点（不再是「帧号 ÷ 帧率」）。
+        # 帧率估计会被实时修正，用它当除数会让时刻漂移甚至倒退 —— 2026-09-24 实测：
+        # 第 11 投记 124.01s、第 12 投记 74.12s（真实顺序相反）。
+        if self._t_start is not None and peak_idx - buf_start < len(self.times):
+            release_time = self.times[peak_idx - buf_start] - self._t_start
+        else:                                    # 兜底：没有时间戳（理论上不会）
+            release_time = peak_idx / self.fps
         return LiveShot(release_time=release_time, metrics=metrics, issues=issues,
                         shot_number=self.shot_count, peak_frame=peak_idx)
